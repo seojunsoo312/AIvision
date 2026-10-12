@@ -67,7 +67,7 @@ GOTO_SETTLE_IK_LOOPS = 4
 # EE go-to: if the straight TCP line would hit the column (L1 = J1–J2), lift first.
 # Height is the lowest via that clears; only then step up toward MAX.
 GOTO_LIFT_CLEAR_M = 0.025
-GOTO_LIFT_STEP_M = 0.025
+GOTO_LIFT_STEP_M = 0.010
 GOTO_LIFT_MAX_Z_M = 0.16
 GOTO_LIFT_SKIP_M = 0.005
 GOTO_PATH_CHECK_N = 10

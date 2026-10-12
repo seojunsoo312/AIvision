@@ -803,16 +803,6 @@ class TeachGraspGui:
         self._grasp_spec = grasp
 
     def _draw_static(self, vertices_m: np.ndarray, faces: np.ndarray) -> None:
-        table_t = 0.004
-        T_table = np.eye(4)
-        T_table[2, 3] = -table_t / 2.0
-        self._viz.set_overlay_box(
-            "table",
-            (0.80, 0.80, table_t),
-            T_table,
-            color=0x2F2F35,
-            opacity=0.45,
-        )
         if not self._region_hidden():
             self._show_region_overlays()
         self._viz.set_overlay_mesh("cad", vertices_m, faces, color=0xC4C4C8, opacity=0.92)
