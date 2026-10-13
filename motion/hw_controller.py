@@ -1,4 +1,4 @@
-"""LeRobot SOFollower wrapper. IK/GUI-unaware. Bus 0° = calib Enter."""
+"""LeRobot SOFollower 래퍼. IK·GUI 는 모른다. 버스 0° = 캘리브 때 Enter 누른 자세."""
 
 from __future__ import annotations
 
@@ -23,31 +23,31 @@ SO_FOLLOWER_NAME = "so_follower"
 # Feetech Max_Torque_Limit / Torque_Limit: 0–1000 = 0–100%.
 TORQUE_LIMIT_UNITS = 1000
 def grip_user_to_100(user_deg: float) -> float:
-    """Pendant S7 user-deg (HOME=0) → LeRobot gripper 0–100 (HOME=50)."""
+    """펜던트 S7 사용자 각도 (HOME=0) → LeRobot 그리퍼 0–100 (HOME=50)."""
     return float(np.clip(user_deg + GRIPPER_MID, 0.0, 100.0))
 
 
 def grip_100_to_user(grip_100: float) -> float:
-    """LeRobot gripper 0–100 → pendant S7 user-deg."""
+    """LeRobot 그리퍼 0–100 → 펜던트 S7 사용자 각도."""
     return float(np.clip(grip_100, 0.0, 100.0)) - GRIPPER_MID
 
 
 def hf_calibration_dir() -> Path:
-    """Same directory lerobot-calibrate uses for so101_follower."""
+    """lerobot-calibrate 가 so101_follower 에 쓰는 것과 같은 폴더."""
     from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
     return HF_LEROBOT_CALIBRATION / ROBOTS / SO_FOLLOWER_NAME
 
 
 def resolve_calibration_dir(explicit: Path | None, _robot_id: str) -> Path:
-    """--calibration-dir, otherwise the lerobot-calibrate cache for this PC."""
+    """--calibration-dir. 없으면 이 PC 의 lerobot-calibrate 캐시."""
     if explicit is not None:
         return Path(explicit)
     return hf_calibration_dir()
 
 
 def _enter_offsets_deg(calibration: dict) -> dict[str, float]:
-    """LeRobot DEGREES zeros at range midpoint; shift so calib Enter (2047) is 0°."""
+    """LeRobot DEGREES 는 범위 가운데가 0. 캘리브 Enter (2047) 가 0° 가 되게 옮긴다."""
     half_turn = (STS3215_RESOLUTION - 1) // 2
     max_res = STS3215_RESOLUTION - 1
     offsets: dict[str, float] = {}
@@ -63,7 +63,7 @@ def _enter_offsets_deg(calibration: dict) -> dict[str, float]:
 
 
 class Hardware:
-    """connect() reads encoders, syncs q, then enables torque. Never dumps a virtual pose."""
+    """connect() 는 엔코더를 읽어 q 를 맞춘 뒤 토크를 켠다. 가상 자세를 실기에 보내지 않는다."""
 
     def __init__(
         self,
@@ -92,7 +92,7 @@ class Hardware:
         return bool(self.is_connected and self._torque)
 
     def connect(self, kin: RobotKinematics) -> np.ndarray:
-        """Bus on, torque off, q from encoders, write that goal, then torque on. Returns Pinocchio q."""
+        """버스 켜기, 토크 끄기, 엔코더로 q 읽기, 그 값을 목표로 쓰기, 토크 켜기. Pinocchio q 를 돌려준다."""
         from lerobot.robots.so_follower import SO101FollowerConfig, SOFollower
 
         self.disconnect()
@@ -129,7 +129,7 @@ class Hardware:
             raise
 
         try:
-            # configure() re-enables torque on exit; hold the measured pose, not a stale goal.
+            # configure() 가 끝날 때 토크를 다시 켠다. 예전 목표가 아니라 지금 잰 자세를 유지한다.
             with self._lock:
                 robot.bus.disable_torque()
             self._enter_off = _enter_offsets_deg(robot.calibration)
@@ -176,17 +176,17 @@ class Hardware:
             robot.bus.disable_torque()
 
     def enable_torque(self) -> None:
-        """Hold the current encoder pose. Do not enable onto the last Goal_Position."""
+        """지금 엔코더 자세를 유지한다. 마지막 Goal_Position 으로 토크를 켜지 않는다."""
         if self._robot is None:
             return
         self.hold_present()
 
     def hold_present(self) -> None:
-        """Torque ON at Present_Position.
+        """Present_Position 에서 토크 ON.
 
-        STS3215 ignores Goal_Position while torque is off. write-then-enable
-        therefore snaps back to the last accepted goal (wrist-down → pops up).
-        Enable each motor, then immediately write that motor's present ticks.
+        STS3215 는 토크가 꺼져 있으면 Goal_Position 을 무시한다. 그래서 목표를 쓰고 켜면
+        마지막으로 받아들인 목표로 튄다 (손목이 내려가 있으면 위로 튀어 오름).
+        모터마다 토크를 켜고, 곧바로 그 모터의 현재 틱을 목표로 쓴다.
         """
         robot = self._robot
         if robot is None:
@@ -202,7 +202,7 @@ class Hardware:
 
     @staticmethod
     def _widen_position_limits(robot, present: dict[str, int]) -> None:
-        """If a joint was hand-guided past recorded ROM, let firmware accept that tick."""
+        """손으로 움직여 기록된 가동 범위를 넘었으면, 펌웨어가 그 틱을 받아들이게 한계를 넓힌다."""
         for motor, ticks in present.items():
             cal = robot.calibration.get(motor) if robot.calibration else None
             if cal is None:
@@ -234,7 +234,7 @@ class Hardware:
             robot.send_action(action)
 
     def set_torque_pct(self, urdf_name: str, pct: float) -> None:
-        """Live torque cap. 0–100% → Feetech 0–1000. EEPROM unlock only for that motor."""
+        """실시간 토크 상한. 0–100% → Feetech 0–1000. EEPROM 잠금은 그 모터만 푼다."""
         if urdf_name not in LEROBOT_FROM_URDF:
             raise KeyError(urdf_name)
         robot = self._robot

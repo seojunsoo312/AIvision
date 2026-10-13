@@ -25,12 +25,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# Orbbec SDK v1.10 C API 의 상수값 (헤더 ObTypes.h / Property.h 와 같은 숫자).
+# 뎁스를 컬러 화면에 맞추는 방식: 2 = 소프트웨어 D2C.
 ALIGN_D2C_SW = 2
 OB_PROP_LDP_BOOL = 2  # Viewer LDP enable. 공장 기본 켜짐.
 OB_PROP_DEPTH_HOLEFILTER_BOOL = 17  # 펌웨어 HoleFilter. ON/OFF만.
-OB_PROP_DEPTH_SOFT_FILTER_BOOL = 24  # Viewer NoiseRemovalFilter
-OB_PROP_DEPTH_MAX_DIFF_INT = 40  # Viewer Min Diff
-OB_PROP_DEPTH_MAX_SPECKLE_SIZE_INT = 41  # Viewer Max Size
+OB_PROP_DEPTH_SOFT_FILTER_BOOL = 24  # Viewer 의 NoiseRemovalFilter
+OB_PROP_DEPTH_MAX_DIFF_INT = 40  # Viewer 의 Min Diff
+OB_PROP_DEPTH_MAX_SPECKLE_SIZE_INT = 41  # Viewer 의 Max Size
 OB_PROP_COLOR_AUTO_EXPOSURE_BOOL = 2000
 OB_PROP_COLOR_EXPOSURE_INT = 2001
 OB_PROP_COLOR_GAIN_INT = 2002
@@ -46,7 +48,12 @@ OB_FORMAT_RGB = 22
 OB_FORMAT_BGR = 23
 
 
+# --- SDK C 구조체를 ctypes 로 옮긴 것. 필드 순서와 타입은 SDK 헤더와 똑같아야 한다. ---
+
+
 class OBIntRange(Structure):
+    """정수 속성의 현재값·최대·최소·간격·기본값."""
+
     _fields_ = [
         ("cur", c_int32),
         ("max", c_int32),
@@ -57,6 +64,8 @@ class OBIntRange(Structure):
 
 
 class OBFloatRange(Structure):
+    """실수 속성의 현재값·최대·최소·간격·기본값."""
+
     _fields_ = [
         ("cur", c_float),
         ("max", c_float),
@@ -72,6 +81,9 @@ def _jpeg_complete(raw: np.ndarray) -> bool:
         return False
     tail = raw[-64:] if raw.size > 64 else raw
     return bool(np.any((tail[:-1] == 0xFF) & (tail[1:] == 0xD9)))
+
+
+# SDK 함수 마지막 인자 ob_error** (실패하면 에러 객체가 여기에 담긴다).
 EP = POINTER(c_void_p)
 # 노트북(x64) Viewer 는 폴더 바로 아래, ARM64(Jetson) 패키지는 lib/ 아래에 둔다.
 _SDK_SO_DIRS = (".", "lib", "lib/*")
@@ -103,6 +115,7 @@ def resolve_sdk_dir() -> Path:
 
 
 def _require_sdk(sdk: Path) -> Path:
+    """SDK 폴더에서 libOrbbecSDK.so 경로를 찾는다. 없으면 설치 안내와 함께 RuntimeError."""
     so = _sdk_so(sdk)
     if so is None:
         raise RuntimeError(
@@ -114,6 +127,10 @@ def _require_sdk(sdk: Path) -> Path:
 
 
 def _bind(lib, name, restype, *argtypes):
+    """SDK 함수에 반환·인자 타입을 지정해서 돌려준다.
+
+    타입을 지정하지 않으면 ctypes 가 포인터를 32비트 int 로 넘겨 잘릴 수 있다.
+    """
     fn = getattr(lib, name)
     fn.restype = restype
     fn.argtypes = list(argtypes)
@@ -121,6 +138,8 @@ def _bind(lib, name, restype, *argtypes):
 
 
 class OBCameraIntrinsic(Structure):
+    """렌즈 내부 값: 초점거리 fx, fy, 중심 cx, cy (픽셀), 영상 크기."""
+
     _fields_ = [
         ("fx", c_float),
         ("fy", c_float),
@@ -132,6 +151,8 @@ class OBCameraIntrinsic(Structure):
 
 
 class OBCameraDistortion(Structure):
+    """렌즈 왜곡 계수. SDK 순서는 k1–k6, p1, p2 (OpenCV 순서와 다르다)."""
+
     _fields_ = [
         ("k1", c_float),
         ("k2", c_float),
@@ -145,6 +166,8 @@ class OBCameraDistortion(Structure):
 
 
 class OBD2CTransform(Structure):
+    """뎁스 카메라 → 컬러 카메라 변환 (회전 3x3, 이동 mm)."""
+
     _fields_ = [
         ("rot", c_float * 9),
         ("trans", c_float * 3),
@@ -152,6 +175,8 @@ class OBD2CTransform(Structure):
 
 
 class OBCameraParam(Structure):
+    """카메라 파라미터 묶음: 뎁스·컬러 내부 값, 왜곡, 둘 사이 변환."""
+
     _fields_ = [
         ("depthIntrinsic", OBCameraIntrinsic),
         ("rgbIntrinsic", OBCameraIntrinsic),
@@ -178,6 +203,7 @@ def _no_file_log(lib, sdk: Path) -> None:
 
 
 def _chk(lib, err, where: str) -> None:
+    """err 에 SDK 에러가 담겨 있으면 메시지를 꺼내 RuntimeError 로 바꾼다."""
     errmsg = _bind(lib, "ob_error_message", c_char_p, c_void_p)
     delerr = _bind(lib, "ob_delete_error", None, c_void_p)
     if err:
@@ -187,6 +213,7 @@ def _chk(lib, err, where: str) -> None:
 
 
 def _intrinsic_dict(intr: OBCameraIntrinsic) -> dict:
+    """내부 값 구조체 → JSON 저장용 딕셔너리."""
     return {
         "fx": float(intr.fx),
         "fy": float(intr.fy),
@@ -198,6 +225,7 @@ def _intrinsic_dict(intr: OBCameraIntrinsic) -> dict:
 
 
 def _dist_dict(dist: OBCameraDistortion) -> dict:
+    """왜곡 구조체 → JSON 저장용 딕셔너리 (SDK 이름 그대로)."""
     return {
         "k1": float(dist.k1),
         "k2": float(dist.k2),
@@ -211,6 +239,7 @@ def _dist_dict(dist: OBCameraDistortion) -> dict:
 
 
 def opencv_K(intr: OBCameraIntrinsic) -> list[list[float]]:
+    """OpenCV 카메라 행렬 K = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]."""
     return [
         [float(intr.fx), 0.0, float(intr.cx)],
         [0.0, float(intr.fy), float(intr.cy)],
@@ -219,7 +248,7 @@ def opencv_K(intr: OBCameraIntrinsic) -> list[list[float]]:
 
 
 def opencv_dist(dist: OBCameraDistortion) -> list[float]:
-    """OpenCV Brown-Conrady: k1, k2, p1, p2, k3, k4, k5, k6."""
+    """OpenCV Brown-Conrady 왜곡 계수: k1, k2, p1, p2, k3, k4, k5, k6."""
     return [
         float(dist.k1),
         float(dist.k2),
@@ -233,6 +262,7 @@ def opencv_dist(dist: OBCameraDistortion) -> list[float]:
 
 
 def _rgb_ok(param: OBCameraParam) -> bool:
+    """컬러 내부 값이 정상인지 (fx 와 크기가 0 이 아닌지). 스트림 전에는 0 이 올 때가 있다."""
     rgb = param.rgbIntrinsic
     return float(rgb.fx) >= 1.0 and int(rgb.width) > 0 and int(rgb.height) > 0
 
@@ -246,6 +276,7 @@ def _payload_from_param(
     depth_w: int,
     depth_h: int,
 ) -> dict:
+    """카메라 파라미터 → vision/calib_data 에 저장할 내부 값 JSON."""
     rgb = param.rgbIntrinsic
     K = opencv_K(rgb)
     dist = opencv_dist(param.rgbDistortion)
@@ -274,17 +305,25 @@ def read_factory_intrinsics(
     depth_size: tuple[int, int] = (640, 400),
     sdk_dir: Path | None = None,
 ) -> dict:
-    """장치에 저장된 공장 캘리브를 SDK로 읽는다. Viewer는 끄고 실행."""
+    """장치에 저장된 공장 캘리브를 SDK로 읽는다. Viewer는 끄고 실행.
+
+    세 가지 방법을 차례로 시도한다:
+    1. 장치에 저장된 캘리브 목록에서 요청한 컬러 해상도와 맞는 것
+    2. 스트림을 잠깐 켜고 파이프라인이 쓰는 값
+    3. 해상도를 지정해서 파이프라인에 직접 묻기
+    """
     sdk = Path(sdk_dir) if sdk_dir is not None else resolve_sdk_dir()
     so = _require_sdk(sdk)
     color_w, color_h = (int(color_size[0]), int(color_size[1]))
     depth_w, depth_h = (int(depth_size[0]), int(depth_size[1]))
+    # SDK 는 설정 파일과 확장 라이브러리를 실행 폴더 기준으로 찾는다. 끝나면 원래 폴더로 돌아간다.
     cwd = os.getcwd()
     os.chdir(sdk)
     pipe = None
     lib = None
     stop = None
     delete = None
+    list_del = None
     param_list = None
     method = ""
     param: OBCameraParam | None = None
@@ -330,6 +369,7 @@ def read_factory_intrinsics(
         dev = get_dev(pipe, byref(err))
         if err:
             _chk(lib, err, "get_device")
+        # 1. 장치에 저장된 캘리브 목록. 컬러 해상도가 같은 것을 고르고, 없으면 첫 정상값.
         if dev:
             err = c_void_p()
             param_list = get_list(dev, byref(err))
@@ -359,6 +399,7 @@ def read_factory_intrinsics(
                     param = chosen
                     method = "ob_device_get_calibration_camera_param_list"
 
+        # 2. 목록이 없거나 비정상이면 스트림을 켜고 프레임을 몇 장 받은 뒤 값을 읽는다.
         if param is None or not _rgb_ok(param):
             err = c_void_p()
             cfg = get_cfg(pipe, byref(err))
@@ -390,6 +431,7 @@ def read_factory_intrinsics(
                 param = live
                 method = "ob_pipeline_get_camera_param"
 
+        # 3. 그래도 안 되면 해상도를 지정해서 묻는다.
         if param is None or not _rgb_ok(param):
             err = c_void_p()
             profile = get_profile(pipe, color_w, color_h, depth_w, depth_h, byref(err))
@@ -397,10 +439,11 @@ def read_factory_intrinsics(
             param = profile
             method = "ob_pipeline_get_camera_param_with_profile"
     finally:
-        if param_list and lib is not None:
+        if param_list and list_del is not None:
             e = c_void_p()
             try:
-                lib.ob_delete_camera_param_list(param_list, byref(e))
+                # 인자 타입을 지정한 list_del 을 쓴다. lib 에서 바로 부르면 64비트 포인터가 int 로 잘린다.
+                list_del(param_list, byref(e))
             except Exception:
                 pass
         if pipe and lib is not None:
@@ -437,6 +480,12 @@ def read_factory_intrinsics(
 
 
 class OrbbecV1:
+    """Orbbec 카메라 (SDK v1.10) 를 열어 컬러와 뎁스를 함께 받는다.
+
+    grab() 은 (BGR 컬러 영상, 뎁스 mm 영상) 을 돌려준다. 뎁스는 컬러 화면에 맞춰져 있다.
+    필터와 노출은 set_* 메서드로 실행 중에 바꿀 수 있다. 다 쓰면 close().
+    """
+
     def __init__(
         self,
         width=640,
@@ -449,6 +498,13 @@ class OrbbecV1:
         hole_filter: bool | None = True,
         ldp: bool = False,
     ):
+        """카메라를 열고 스트림을 시작한다.
+
+        width, height: 컬러 해상도. 뎁스도 이 크기로 맞춘다.
+        noise_filter / noise_min_diff / noise_max_size: 펌웨어 노이즈 제거 (Viewer 와 같은 값).
+        hole_filter: 펌웨어 구멍 메우기. ldp: 레이저 근접 보호.
+        None 으로 주면 그 설정은 건드리지 않는다.
+        """
         sdk = Path(sdk_dir) if sdk_dir is not None else resolve_sdk_dir()
         so = _require_sdk(sdk)
         cwd = os.getcwd()
@@ -457,6 +513,7 @@ class OrbbecV1:
             self.lib = CDLL(str(so.resolve()), mode=RTLD_GLOBAL)
             _no_file_log(self.lib, sdk)
             L = self.lib
+            # 쓸 SDK 함수들을 타입과 함께 미리 묶어 둔다.
             self._create = _bind(L, "ob_create_pipeline", c_void_p, EP)
             self._get_cfg = _bind(L, "ob_pipeline_get_config", c_void_p, c_void_p, EP)
             self._set_align = _bind(L, "ob_config_set_align_mode", None, c_void_p, c_int, EP)
@@ -528,6 +585,7 @@ class OrbbecV1:
             self._errmsg = _bind(L, "ob_error_message", c_char_p, c_void_p)
             self._delerr = _bind(L, "ob_delete_error", None, c_void_p)
 
+            # 파이프라인 생성 → 뎁스를 컬러에 맞추도록 설정 → 장치 속성 적용 → 시작.
             err = c_void_p()
             self.pipe = self._create(byref(err))
             self._chk(err, "create_pipeline")
@@ -551,20 +609,24 @@ class OrbbecV1:
             err = c_void_p()
             self._start(self.pipe, self.cfg, byref(err))
             self._chk(err, "start — Viewer 끄기")
+            # PC 에서 돌리는 필터 두 개. 만들어만 두고 기본은 끔.
             self._init_temporal_filter()
             self._init_holefill_filter()
         finally:
             os.chdir(cwd)
+        # 새 프레임이 없을 때 돌려줄 마지막 영상.
         self._last_bgr = None
         self._last_depth = None
 
     def _chk(self, err, where):
+        """err 에 SDK 에러가 있으면 RuntimeError."""
         if err:
             msg = self._errmsg(err) or b""
             self._delerr(err)
             raise RuntimeError(f"{where}: {msg.decode(errors='replace')}")
 
     def _prop_supported(self, dev, prop_id: int, permission: int = OB_PERMISSION_WRITE) -> bool:
+        """이 장치가 그 속성을 (읽기/쓰기 권한으로) 지원하는지."""
         err = c_void_p()
         ok = bool(self._prop_ok(dev, prop_id, permission, byref(err)))
         if err:
@@ -573,6 +635,7 @@ class OrbbecV1:
         return ok
 
     def _set_bool_prop(self, dev, prop_id: int, value: bool, name: str) -> bool:
+        """켜기/끄기 속성을 쓴다. 지원하지 않거나 실패하면 출력하고 False."""
         if not self._prop_supported(dev, prop_id):
             print(f"{name}: 이 장치는 지원하지 않음")
             return False
@@ -586,6 +649,7 @@ class OrbbecV1:
         return True
 
     def _set_int_prop(self, dev, prop_id: int, value: int, name: str) -> bool:
+        """정수 속성을 쓴다. 지원하지 않거나 실패하면 출력하고 False."""
         if not self._prop_supported(dev, prop_id):
             print(f"{name}: 이 장치는 지원하지 않음")
             return False
@@ -599,6 +663,7 @@ class OrbbecV1:
         return True
 
     def _get_bool_prop(self, dev, prop_id: int) -> bool | None:
+        """켜기/끄기 속성을 읽는다. 실패하면 None."""
         err = c_void_p()
         value = bool(self._get_bool(dev, prop_id, byref(err)))
         if err:
@@ -607,6 +672,7 @@ class OrbbecV1:
         return value
 
     def _get_int_prop(self, dev, prop_id: int) -> int | None:
+        """정수 속성을 읽는다. 실패하면 None."""
         err = c_void_p()
         value = int(self._get_int(dev, prop_id, byref(err)))
         if err:
@@ -627,6 +693,7 @@ class OrbbecV1:
         print(f"LDP on={cur}")
 
     def _device_ptr(self):
+        """파이프라인의 장치 포인터. 없으면 None."""
         err = c_void_p()
         dev = self._get_dev(self.pipe, byref(err))
         if err:
@@ -635,6 +702,7 @@ class OrbbecV1:
         return dev
 
     def get_noise_filter(self) -> dict:
+        """펌웨어 노이즈 제거 상태: {"on", "min_diff", "max_size"}."""
         dev = self._device_ptr()
         if not dev:
             return {"on": None, "min_diff": None, "max_size": None}
@@ -652,6 +720,7 @@ class OrbbecV1:
         *,
         quiet: bool = False,
     ) -> dict:
+        """펌웨어 노이즈 제거를 바꾸고 바뀐 상태를 돌려준다. None 인 값은 그대로 둔다."""
         self._apply_noise_filter(enable, min_diff, max_size, quiet=quiet)
         return self.get_noise_filter()
 
@@ -687,6 +756,7 @@ class OrbbecV1:
         )
 
     def _int_range(self, prop_id: int, fallback: tuple[int, int]) -> tuple[int, int]:
+        """정수 속성의 (최소, 최대). 읽지 못하면 fallback."""
         dev = self._device_ptr()
         if not dev:
             return fallback
@@ -706,18 +776,21 @@ class OrbbecV1:
         return lo, hi
 
     def has_property(self, prop_id: int) -> bool:
+        """그 속성을 지원하는지 (권한 무관)."""
         dev = self._device_ptr()
         if not dev:
             return False
         return self._prop_supported(dev, prop_id, OB_PERMISSION_ANY)
 
     def get_hole_filter(self) -> bool | None:
+        """펌웨어 HoleFilter 가 켜져 있는지. 읽지 못하면 None."""
         dev = self._device_ptr()
         if not dev:
             return None
         return self._get_bool_prop(dev, OB_PROP_DEPTH_HOLEFILTER_BOOL)
 
     def set_hole_filter(self, enable: bool, *, quiet: bool = False) -> bool | None:
+        """펌웨어 HoleFilter 를 켜거나 끈다."""
         self._apply_hole_filter(bool(enable), quiet=quiet)
         return self.get_hole_filter()
 
@@ -734,6 +807,7 @@ class OrbbecV1:
         print(f"HoleFilter on={self.get_hole_filter()}")
 
     def get_depth_exposure(self) -> dict:
+        """뎁스 노출 상태: {"ae" (자동 노출), "exposure", "gain"}."""
         dev = self._device_ptr()
         if not dev:
             return {"ae": None, "exposure": None, "gain": None}
@@ -754,6 +828,7 @@ class OrbbecV1:
         gain: int | None = None,
         quiet: bool = False,
     ) -> dict:
+        """뎁스 노출을 바꾼다. 자동 노출이 켜져 있으면 수동 노출·게인은 쓰지 않는다."""
         dev = self._device_ptr()
         if not dev:
             print("Depth exposure: device 없음")
@@ -783,6 +858,7 @@ class OrbbecV1:
         return self.get_depth_exposure()
 
     def get_color_exposure(self) -> dict:
+        """컬러 노출 상태: {"ae" (자동 노출), "exposure", "gain"}."""
         dev = self._device_ptr()
         if not dev:
             return {"ae": None, "exposure": None, "gain": None}
@@ -803,6 +879,7 @@ class OrbbecV1:
         gain: int | None = None,
         quiet: bool = False,
     ) -> dict:
+        """컬러 노출을 바꾼다. 자동 노출이 켜져 있으면 수동 노출·게인은 쓰지 않는다."""
         dev = self._device_ptr()
         if not dev:
             print("Color exposure: device 없음")
@@ -838,6 +915,7 @@ class OrbbecV1:
         return self.get_color_exposure()
 
     def _init_temporal_filter(self) -> None:
+        """시간 필터 (여러 프레임을 섞어 깜빡임을 줄임) 를 만든다. 기본값은 SDK 에서 읽고, 꺼 둔다."""
         self._temporal = None
         self._temporal_on = False
         self._temporal_weight = 0.4
@@ -863,6 +941,7 @@ class OrbbecV1:
             lo, hi = float(wr.min), float(wr.max)
             if hi > lo:
                 self._temporal_weight_range = (lo, hi)
+                # "def" 는 파이썬 예약어라 getattr 로 읽는다. NaN 이면 범위 가운데를 쓴다.
                 default = float(getattr(wr, "def"))
                 self._temporal_weight = (
                     default if default == default else (lo + hi) * 0.5
@@ -892,6 +971,7 @@ class OrbbecV1:
         )
 
     def get_temporal_filter(self) -> dict:
+        """시간 필터 상태와 값 범위."""
         return {
             "ok": self._temporal is not None,
             "on": self._temporal_on,
@@ -909,6 +989,7 @@ class OrbbecV1:
         *,
         quiet: bool = False,
     ) -> dict:
+        """시간 필터를 바꾼다. weight·diffscale 은 SDK 범위 안으로 자른다."""
         filt = self._temporal
         if filt is None:
             return self.get_temporal_filter()
@@ -928,6 +1009,7 @@ class OrbbecV1:
                 self._delerr(e)
         if enable is not None:
             on = bool(enable)
+            # 끌 때는 쌓인 이전 프레임을 비워서, 다시 켰을 때 옛 영상이 섞이지 않게 한다.
             if on != self._temporal_on and not on:
                 e = c_void_p()
                 self._filter_reset(filt, byref(e))
@@ -947,6 +1029,7 @@ class OrbbecV1:
         return self.get_temporal_filter()
 
     def _init_holefill_filter(self) -> None:
+        """PC 쪽 구멍 메우기 필터를 만든다. 모드 1 (Nearest), 꺼 둔다."""
         self._holefill = None
         self._holefill_on = False
         self._holefill_mode = 1
@@ -978,6 +1061,7 @@ class OrbbecV1:
         *,
         quiet: bool = False,
     ) -> dict:
+        """PC 쪽 구멍 메우기를 바꾼다. mode: 0=Top, 1=Nearest, 2=Farest."""
         filt = getattr(self, "_holefill", None)
         if filt is None:
             return {"ok": False, "on": False, "mode": None}
@@ -1002,6 +1086,7 @@ class OrbbecV1:
         return self.get_hole_filling()
 
     def get_hole_filling(self) -> dict:
+        """PC 쪽 구멍 메우기 상태."""
         ok = getattr(self, "_holefill", None) is not None
         return {
             "ok": ok,
@@ -1010,6 +1095,10 @@ class OrbbecV1:
         }
 
     def _run_host_filters(self, depth):
+        """켜진 PC 필터를 시간 필터 → 구멍 메우기 순서로 뎁스 프레임에 적용한다.
+
+        필터가 새 프레임을 만들면 이전 프레임은 지운다.
+        """
         chain = (
             (getattr(self, "_temporal", None), getattr(self, "_temporal_on", False)),
             (getattr(self, "_holefill", None), getattr(self, "_holefill_on", False)),
@@ -1029,6 +1118,7 @@ class OrbbecV1:
         return depth
 
     def depth_ui_caps(self) -> dict:
+        """필터 창이 어떤 조절을 보여 줄지: 지원 여부와 값 범위."""
         exp_lo, exp_hi = self._int_range(OB_PROP_DEPTH_EXPOSURE_INT, (0, 10000))
         gain_lo, gain_hi = self._int_range(OB_PROP_DEPTH_GAIN_INT, (0, 9999))
         cexp_lo, cexp_hi = self._int_range(OB_PROP_COLOR_EXPOSURE_INT, (1, 10000))
@@ -1054,6 +1144,10 @@ class OrbbecV1:
         }
 
     def grab(self, timeout_ms=1000):
+        """(BGR 컬러, 뎁스 mm float32) 를 받는다.
+
+        timeout_ms 안에 새 프레임이 없으면 마지막 영상을 다시 돌려준다 (처음이면 None).
+        """
         err = c_void_p()
         fs = self._wait(self.pipe, timeout_ms, byref(err))
         if err:
@@ -1077,6 +1171,7 @@ class OrbbecV1:
         return dropped
 
     def _consume_frameset(self, fs):
+        """frameset 에서 컬러·뎁스를 꺼내 numpy 로 바꾸고, SDK 프레임은 모두 지운다."""
         e = c_void_p()
         color = self._color_f(fs, byref(e))
         e = c_void_p()
@@ -1097,6 +1192,7 @@ class OrbbecV1:
         return self._last_bgr, self._last_depth
 
     def _color_to_bgr(self, frame):
+        """컬러 프레임 → BGR 영상. MJPG 는 디코드하고, 잘린 JPEG 이면 None."""
         e = c_void_p()
         w, h = int(self._w(frame, byref(e))), int(self._h(frame, byref(e)))
         e = c_void_p()
@@ -1117,6 +1213,7 @@ class OrbbecV1:
         return None
 
     def _depth_to_mm(self, frame):
+        """뎁스 프레임 (uint16) → mm 단위 float32. 0 은 측정값 없음."""
         e = c_void_p()
         w, h = int(self._w(frame, byref(e))), int(self._h(frame, byref(e)))
         e = c_void_p()
@@ -1129,6 +1226,7 @@ class OrbbecV1:
         return raw.reshape(h, w).astype(np.float32) * scale
 
     def _drain_frames(self) -> None:
+        """닫기 전에 큐에 남은 프레임을 비운다."""
         pipe = getattr(self, "pipe", None)
         if not pipe:
             return
@@ -1143,6 +1241,7 @@ class OrbbecV1:
             self._del_frame(fs, byref(e))
 
     def close(self):
+        """필터 끄기 → 남은 프레임 비우기 → 스트림 정지 → 필터·파이프라인 지우기."""
         self._temporal_on = False
         self._holefill_on = False
         host = [

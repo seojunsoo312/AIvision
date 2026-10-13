@@ -107,14 +107,6 @@ class OrbbecCapture:
                 max_size=max_size,
             )
 
-    @property
-    def orbbec(self):
-        return self._cam
-
-    @property
-    def filter_panel(self):
-        return self._filters
-
     def isOpened(self) -> bool:
         return getattr(self._cam, "pipe", None) is not None
 

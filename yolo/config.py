@@ -37,10 +37,6 @@ BEST_PT = WEIGHTS_DIR / "best.pt"
 CLASS_NAME = class_name()
 
 
-def pose_class_ids() -> tuple[int, ...]:
-    return tuple(cid for cid, _name, _ko in POSE_CLASSES)
-
-
 def pose_name(class_id: int, *, korean: bool = False) -> str:
     for cid, name, ko in POSE_CLASSES:
         if cid == int(class_id):
@@ -70,6 +66,7 @@ def class_from_args(args) -> str:
         return CLASS_NAME
     name = str(raw).strip()
     return name or CLASS_NAME
+
 
 VAL_RATIO = 0.2
 SPLIT_SEED = 42
@@ -143,11 +140,3 @@ def quiet_gtk() -> None:
         return
     os.environ["QT_QPA_FONTDIR"] = str(fonts)
     _link_cv2_qt_fonts(fonts)
-
-
-def ensure_project_on_path() -> None:
-    import sys
-
-    path = str(PROJECT_ROOT)
-    if path not in sys.path:
-        sys.path.insert(0, path)

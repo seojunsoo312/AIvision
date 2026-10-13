@@ -1,4 +1,4 @@
-"""Aligned RGB-D → camera-frame point cloud inside a 2D ROI."""
+"""정렬된 RGB-D → 2D ROI 안의 카메라 좌표 점군."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from vision.calib import load_K, load_T_base_cam
 from vision.rgbd import OrbbecV1
 
 Z_MIN_MM = 80.0
@@ -65,21 +64,6 @@ def colorize_depth(
         cv2.LINE_AA,
     )
     return vis
-
-
-def mask_from_quad(
-    h: int, w: int, quad, pad: int = 2
-) -> np.ndarray:
-    """OBB 네 꼭짓점으로 ROI. pad 는 팽창 픽셀."""
-    mask = np.zeros((h, w), dtype=np.uint8)
-    pts = np.asarray(quad, dtype=np.float32).reshape(-1, 2)
-    if len(pts) < 3:
-        return mask.astype(bool)
-    cv2.fillPoly(mask, [np.round(pts).astype(np.int32)], 1)
-    if pad > 0 and np.any(mask):
-        k = 2 * int(pad) + 1
-        mask = cv2.dilate(mask, np.ones((k, k), np.uint8))
-    return mask.astype(bool)
 
 
 def mask_from_xyxy(

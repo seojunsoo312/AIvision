@@ -38,14 +38,6 @@ def _class_id(raw: str) -> int:
     return cid if cid >= 0 else CLASS_ID
 
 
-def order_quad(pts: np.ndarray) -> Quad:
-    """네 점을 중심 기준 반시계로 정렬한다. 클릭 순서는 상관없다."""
-    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
-    c = pts.mean(axis=0)
-    ang = np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0])
-    return pts[np.argsort(ang)]
-
-
 def aabb_quad(x1: float, y1: float, x2: float, y2: float) -> Quad:
     """가로세로 박스 두 꼭짓점 → (4, 2)."""
     xa, xb = (x1, x2) if x1 <= x2 else (x2, x1)

@@ -189,24 +189,6 @@ def _nn_dists(query: np.ndarray, ref: np.ndarray) -> np.ndarray:
     return np.asarray(q.compute_point_cloud_distance(r), dtype=np.float64)
 
 
-def scene_coverage(
-    cad_xyz: np.ndarray,
-    scene_xyz: np.ndarray,
-    T: np.ndarray,
-    *,
-    thresh_mm: float = 3.0,
-) -> dict:
-    """회색(scene) 점이 변환된 CAD 위에 얼마나 올라갔는지."""
-    aligned = apply_T(_as_xyz(cad_xyz), np.asarray(T, dtype=np.float64))
-    dist = _nn_dists(_as_xyz(scene_xyz), aligned)
-    return {
-        "frac": float(np.mean(dist <= thresh_mm)),
-        "median": float(np.median(dist)),
-        "p90": float(np.percentile(dist, 90)),
-        "max": float(np.max(dist)),
-    }
-
-
 def visible_xyz(
     xyz: np.ndarray,
     camera_origin: np.ndarray | None = None,
@@ -328,21 +310,6 @@ def _icp_from(source, target, T, dist_mm: float, plane: bool, *, iters: int = 80
         est,
         o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=int(iters)),
     )
-
-
-def _R_axis(axis: int, deg: float) -> np.ndarray:
-    a = np.deg2rad(float(deg))
-    c, s = float(np.cos(a)), float(np.sin(a))
-    if axis == 0:
-        return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
-    if axis == 1:
-        return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
-    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-
-
-def _yaw_rots() -> list[np.ndarray]:
-    """책상 위 ㄴ은 yaw(CAD Z)만 90° 주기. Rx/Ry 는 팔을 세워서 축이 ㄴ 안으로 들어간다."""
-    return [_R_axis(2, deg) for deg in (0.0, 90.0, 180.0, 270.0)]
 
 
 def _unit3(v: np.ndarray) -> np.ndarray:
@@ -489,67 +456,6 @@ def _pick_by_coverage(
             best_T = T
             best_cov = cov
     return best_T, best_cov
-
-
-def _icp_multiscale(source, target, T, *, voxel_mm: float) -> np.ndarray:
-    Tcur = np.asarray(T, dtype=np.float64).reshape(4, 4)
-    v = max(float(voxel_mm), 0.8)
-    stages = (
-        (max(8.0, v * 6.0), True, 80),
-        (max(4.0, v * 3.0), True, 80),
-        (max(2.0, v * 1.5), True, 100),
-        (max(1.2, v), False, 80),
-    )
-    for dist, plane, iters in stages:
-        result = _icp_from(source, target, Tcur, dist, plane, iters=iters)
-        if result.fitness > 0.0:
-            Tcur = np.asarray(result.transformation, dtype=np.float64)
-    return Tcur
-
-
-def _apply_cov(best: dict, T: np.ndarray, cov: dict, method: str) -> None:
-    best["T"] = T
-    best["icp_method"] = method
-    best["fitness"] = cov["frac"]
-    best["inlier_rmse"] = cov["median"]
-    best["scene_frac"] = cov["frac"]
-    best["scene_med"] = cov["median"]
-    best["scene_p90"] = cov["p90"]
-    best["vis_frac"] = cov["vis_frac"]
-    best["xy_iou"] = cov["xy_iou"]
-    best["aligned_ok"] = cov["aligned_ok"]
-
-
-def _refine_candidates(
-    cad: np.ndarray,
-    scene: np.ndarray,
-    source,
-    target,
-    T0: np.ndarray,
-    *,
-    camera_origin: np.ndarray,
-    voxel_mm: float,
-    try_90: bool,
-) -> tuple[np.ndarray, dict, str]:
-    """무게중심 + 다단 ICP. 첫 등록이면 ㄴ 90°도 같이 본다."""
-    rots = _yaw_rots() if try_90 else [np.eye(3)]
-    T0 = np.asarray(T0, dtype=np.float64).reshape(4, 4)
-    best_T = T0
-    best_cov = pose_coverage(cad, scene, T0, thresh_mm=3.0, camera_origin=camera_origin)
-    best_key = _score_key(best_cov)
-    best_method = "icp_hold"
-    for Rloc in rots:
-        T = T0.copy()
-        T[:3, :3] = T0[:3, :3] @ Rloc
-        T = _icp_multiscale(source, target, T, voxel_mm=voxel_mm)
-        cov = pose_coverage(cad, scene, T, thresh_mm=3.0, camera_origin=camera_origin)
-        key = _score_key(cov)
-        if key > best_key:
-            best_key = key
-            best_T = T
-            best_cov = cov
-            best_method = "icp_refine"
-    return best_T, best_cov, best_method
 
 
 def _ransac_once(source, target, source_fpfh, target_fpfh, dist: float):
@@ -797,7 +703,7 @@ def register_fpfh_icp(
 
 
 def T_to_xyzrpy(T: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """4x4 → xyz mm, rpy deg. XYZ extrinsic = ZYX intrinsic. R = Rz @ Ry @ Rx."""
+    """4x4 → xyz mm, rpy 도. XYZ 외부 회전 = ZYX 내부 회전. R = Rz @ Ry @ Rx."""
     T = np.asarray(T, dtype=np.float64).reshape(4, 4)
     xyz = T[:3, 3].copy()
     r00, r10, r20 = float(T[0, 0]), float(T[1, 0]), float(T[2, 0])

@@ -50,7 +50,7 @@ from motion.robot_kinematics import (
     rpy_deg_to_rotmat,
 )
 
-# Random place (project base mm): front half ring ∩ height, mesh above floor.
+# 랜덤 배치 (프로젝트 베이스 mm): 앞쪽 반원 고리 ∩ 높이 범위, 메시는 바닥 위.
 # x=r·cosθ, y=r·sinθ; θ ∈ (−90°, 90°) → x > 0 (전진) half-plane.
 # 팔이 닿는 범위는 베이스 중심의 고리라 사각형으로 자르지 않는다. 작업면 z=0 에서
 # 눕힌 브라켓을 모든 방향으로 수직 집기 되는 반경은 각도와 거의 무관하게 약 95~250 mm
@@ -65,22 +65,22 @@ RANDOM_THETA_MAX_DEG = 90.0
 RANDOM_Z_MIN_MM = 0.0
 RANDOM_Z_MAX_MM = 40.0
 RANDOM_PLACE_MAX_TRIES = 800
-# Constrained random-place modes (project base).
+# 자세를 제한한 랜덤 배치 모드 (프로젝트 베이스).
 STAND_Z_MM = 2.0
 STAND_ROLL_DEG = 0.0
 STAND_PITCH_DEG = 0.0
-# Stand (CAD Z approach): shift P opposite TCP X along object X so P→G clears the lip.
-STAND_PRE_SHIFT_NEG_X_MM = 5.0  # TCP X ∥ object +X → P along −X
-STAND_PRE_SHIFT_POS_X_MM = 10.0  # TCP X ∥ object −X → P along +X
-SLANT_PRE_SHIFT_MM = 15.0  # ㅅ/V: P (and G) opposite TCP X
-# Lie (CAD Y approach): extra P at (0.6 lx, same Y as face+d, 0.6 lz), TCP X ∥ CAD (−1,0,−1).
+# 세움 (CAD Z 접근): P 를 물체 X 를 따라 TCP X 반대쪽으로 옮겨 P→G 가 턱에 걸리지 않게 한다.
+STAND_PRE_SHIFT_NEG_X_MM = 5.0  # TCP X ∥ 물체 +X → P 는 −X 쪽
+STAND_PRE_SHIFT_POS_X_MM = 10.0  # TCP X ∥ 물체 −X → P 는 +X 쪽
+SLANT_PRE_SHIFT_MM = 15.0  # ㅅ/V: P (와 G) 는 TCP X 반대쪽
+# 눕힘 (CAD Y 접근): 추가 P 는 (0.6 lx, 면+d 와 같은 Y, 0.6 lz), TCP X ∥ CAD (−1,0,−1).
 LIE_ALT_XZ_FRAC = 0.4
 LIE_ALT_TCP_X_CAD = np.array([-1.0, 0.0, -1.0], dtype=float)
 LIE_Z_MM = 17.5
 LIE_YAW_DEG = 0.0
 LIE_ROLL_CHOICES_DEG = (90.0, -90.0)
 SLANT_Z_MM = 34.0
-# CAD (−1,0,−1)/√2 ∥ base +Z → ㅅ. (+1,0,+1) would be V.
+# CAD (−1,0,−1)/√2 ∥ 베이스 +Z → ㅅ. (+1,0,+1) 이면 V.
 SLANT_AXIS_CAD = np.array([-1.0, 0.0, -1.0], dtype=float) / np.sqrt(2.0)
 RANDOM_PLACE_MODES = ("stand", "lie", "slant", "free")
 
@@ -100,29 +100,29 @@ class GraspSpec:
 
 @dataclass(frozen=True)
 class AutoPreResult:
-    """Auto pre/grasp in project base. TCP columns: X=roll, Y=pitch, Z=yaw.
+    """프로젝트 베이스 기준 자동 pre/grasp. TCP 열: X=roll, Y=pitch, Z=yaw.
 
-    Face axes X/Y/Z: pre at (L+d); diagonal N=(1,0,1)/√2: pre at ±d·N (ㅅ/V).
-    Grasp = pre − a along that axis (toward CAD origin).
+    면 축 X/Y/Z: pre 는 (L+d). 대각선 N=(1,0,1)/√2: pre 는 ±d·N (ㅅ/V).
+    grasp = pre 에서 그 축을 따라 a 만큼 (CAD 원점 쪽으로).
     """
 
-    T_base: np.ndarray  # pre
-    T_grasp_base: np.ndarray  # grasp (a)
+    T_base: np.ndarray  # 대기(pre)
+    T_grasp_base: np.ndarray  # 집기 (a)
     axis_name: str
     point_index: int
     pitch_flipped: bool
     d_mm: float
     a_mm: float
-    form: str = ""  # "", "ㅅ", "V" when axis is N; "alt" for lie offset P
-    other_pre_base: tuple[float, float, float] | None = None  # unused lie P (m)
+    form: str = ""  # 축이 N 일 때 "", "ㅅ", "V". 눕힘 보조 P 면 "alt"
+    other_pre_base: tuple[float, float, float] | None = None  # 쓰지 않은 눕힘 P (m)
 
 
-# CAD diagonal for ㅅ/V approaches (normalized).
+# ㅅ/V 접근용 CAD 대각선 (정규화).
 N_CAD = np.array([1.0, 0.0, 1.0], dtype=float) / np.sqrt(2.0)
 
 
 def load_specs(path: Path = CAD_YAML) -> tuple[PlacePose, GraspSpec]:
-    """model.yaml `place`, `grasp` → dataclass."""
+    """model.yaml 의 `place`, `grasp` → dataclass."""
     place_xyz, place_rpy = place_xyzrpy(path)
     grasp_xyz, grasp_rpy, gripper = grasp_xyzrpy_gripper(path)
     return (
@@ -146,12 +146,12 @@ def T_to_xyzrpy(T: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _wrap_deg(deg: float) -> float:
-    """Map degrees into (-180, 180]."""
+    """각도를 (-180, 180] 으로 맞춘다."""
     return float((float(deg) + 180.0) % 360.0 - 180.0)
 
 
 def rpy_body_xyz_to_rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
-    """CAD-axis (object) RPY: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)."""
+    """CAD 축(물체) 기준 RPY: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)."""
     r, p, y = np.deg2rad([float(roll), float(pitch), float(yaw)])
     return np.asarray(
         pin.exp3(np.array([r, 0.0, 0.0]))
@@ -162,7 +162,7 @@ def rpy_body_xyz_to_rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
 
 
 def rotmat_to_rpy_body_xyz(rot: np.ndarray) -> tuple[float, float, float]:
-    """Inverse of rpy_body_xyz_to_rotmat."""
+    """rpy_body_xyz_to_rotmat 의 역변환."""
     R = np.asarray(rot, dtype=float).reshape(3, 3)
     sp = float(np.clip(R[0, 2], -1.0, 1.0))
     pitch = float(np.arcsin(sp))
@@ -183,7 +183,7 @@ def rotmat_to_rpy_body_xyz(rot: np.ndarray) -> tuple[float, float, float]:
 def rpy_extrinsic_to_body_xyz(
     rpy_deg: tuple[float, float, float] | np.ndarray,
 ) -> tuple[float, float, float]:
-    """Base extrinsic (pose_to_T) → pendant CAD-axis RPY display."""
+    """베이스 외부 회전 (pose_to_T) → 펜던트에 보이는 CAD 축 RPY."""
     r = np.asarray(rpy_deg, dtype=float).reshape(3)
     return rotmat_to_rpy_body_xyz(rpy_deg_to_rotmat(float(r[0]), float(r[1]), float(r[2])))
 
@@ -191,7 +191,7 @@ def rpy_extrinsic_to_body_xyz(
 def rpy_body_xyz_to_extrinsic(
     roll: float, pitch: float, yaw: float
 ) -> tuple[float, float, float]:
-    """Pendant CAD-axis RPY → base extrinsic for pose_to_T / yaml."""
+    """펜던트 CAD 축 RPY → pose_to_T / yaml 용 베이스 외부 회전."""
     out = rotmat_to_rpy_deg(rpy_body_xyz_to_rotmat(roll, pitch, yaw))
     return float(_wrap_deg(out[0])), float(_wrap_deg(out[1])), float(_wrap_deg(out[2]))
 
@@ -258,35 +258,8 @@ def place_rpy_base_delta(
     )
 
 
-def place_axis_alignment_text(
-    rpy_deg: tuple[float, float, float] | np.ndarray,
-    *,
-    tol_deg: float = 15.0,
-) -> str:
-    """물체 XYZ 축이 프로젝트 베이스 어느 축에 가까운지 한 줄 요약."""
-    R = rpy_deg_to_rotmat(float(rpy_deg[0]), float(rpy_deg[1]), float(rpy_deg[2]))
-    names = "XYZ"
-    parts: list[str] = []
-    for i, n in enumerate(names):
-        v = R[:, i]
-        j = int(np.argmax(np.abs(v)))
-        c = float(np.clip(abs(v[j]), 0.0, 1.0))
-        ang = float(np.degrees(np.arccos(c)))
-        sign = "+" if v[j] >= 0 else "-"
-        mark = "" if ang <= tol_deg else f"~{ang:.0f}°"
-        parts.append(f"{n}≈{sign}{names[j]}{mark}")
-    return " ".join(parts)
-
-
-def frames_from_specs(place: PlacePose, grasp: GraspSpec) -> np.ndarray:
-    """Return T_base_grasp in project base (+X forward)."""
-    T_base_cad = pose_to_T(np.array(place.xyz_mm), np.array(place.rpy_deg))
-    T_cad_grasp = pose_to_T(np.array(grasp.xyz_mm), np.array(grasp.rpy_deg))
-    return T_base_cad @ T_cad_grasp
-
-
 def _rot_from_pitch_roll(y_hat: np.ndarray, x_raw: np.ndarray) -> np.ndarray:
-    """TCP R with columns [roll=X, pitch=Y, yaw=Z], right-handed."""
+    """TCP 회전 행렬. 열은 [roll=X, pitch=Y, yaw=Z], 오른손 좌표계."""
     y = np.asarray(y_hat, dtype=float).reshape(3)
     yn = float(np.linalg.norm(y))
     if yn < 1e-12:
@@ -296,7 +269,7 @@ def _rot_from_pitch_roll(y_hat: np.ndarray, x_raw: np.ndarray) -> np.ndarray:
     x = x - y * float(np.dot(x, y))
     xn = float(np.linalg.norm(x))
     if xn < 1e-9:
-        # Degenerate: pick any orthonormal.
+        # 퇴화한 경우: 아무 직교 기저나 고른다.
         tmp = np.array([1.0, 0.0, 0.0]) if abs(y[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
         x = tmp - y * float(np.dot(tmp, y))
         xn = float(np.linalg.norm(x))
@@ -313,14 +286,10 @@ FALLBACK_MM_PER_DEG = 5.0
 FALLBACK_S6_DEG_WEIGHT = 0.01
 
 
-def _pre_ik_ok(kin, q0: np.ndarray, xyz_urdf: np.ndarray, R_urdf: np.ndarray) -> bool:
-    return _pre_ik_s6(kin, q0, xyz_urdf, R_urdf) is not None
-
-
 def _pre_ik_eval(
     kin, q0: np.ndarray, xyz_urdf: np.ndarray, R_urdf: np.ndarray
 ) -> tuple[float, float, float, bool]:
-    """IK from q0 toward the pose. Returns (S6 user deg, pos err m, rot err rad, S6 in limits)."""
+    """q0 에서 그 자세로 IK. 반환: (S6 사용자 각도, 위치 오차 m, 회전 오차 rad, S6 한계 안인지)."""
     q = np.asarray(q0, dtype=float).copy()
     for _ in range(60):
         q = kin.servo_toward(q, xyz_urdf, R_ref=R_urdf, ori_weight=1.0)
@@ -333,7 +302,7 @@ def _pre_ik_eval(
 
 
 def _pre_ik_s6(kin, q0: np.ndarray, xyz_urdf: np.ndarray, R_urdf: np.ndarray) -> float | None:
-    """Return reached S6 (user deg) if pose is reachable within S6 soft limits."""
+    """S6 소프트 한계 안에서 닿으면 도달한 S6 (사용자 각도), 아니면 None."""
     s6, err_p, err_r, s6_ok = _pre_ik_eval(kin, q0, xyz_urdf, R_urdf)
     if not s6_ok or err_p >= 0.0015 or err_r >= 0.12:
         return None
@@ -341,7 +310,7 @@ def _pre_ik_s6(kin, q0: np.ndarray, xyz_urdf: np.ndarray, R_urdf: np.ndarray) ->
 
 
 def _tcp_s6(kin, q, p_base: np.ndarray, R_tcp: np.ndarray) -> float | None:
-    """Reached S6 (user deg) for TCP pose in project base, or None if unreachable."""
+    """프로젝트 베이스 TCP 자세에 도달한 S6 (사용자 각도). 닿지 않으면 None."""
     T = np.eye(4)
     T[:3, :3] = np.asarray(R_tcp, dtype=float)
     T[:3, 3] = np.asarray(p_base, dtype=float).reshape(3)
@@ -359,10 +328,10 @@ def _pick_tcp_rot(
     q,
     prefer_min_s6_delta: bool = True,
 ) -> tuple[np.ndarray, bool]:
-    """Build TCP R. Prefer unflipped pitch; among those, min |ΔS6| on roll±.
+    """TCP 회전을 만든다. 뒤집히지 않은 pitch 를 먼저, 그중 roll± 에서 |ΔS6| 가 작은 것.
 
-    Pitch flip (e.g. stand green axis pointing down) is only used if no
-    unflipped pitch × roll candidate is IK-reachable within S6 limits.
+    pitch 뒤집기 (예: 세움 자세에서 초록 축이 아래를 향함)는
+    뒤집지 않은 pitch × roll 후보가 S6 한계 안에서 하나도 IK 로 닿지 않을 때만 쓴다.
     """
     pitch0 = np.asarray(pitch_base, dtype=float).reshape(3)
     rolls = [np.asarray(r, dtype=float).reshape(3) for r in roll_candidates]
@@ -389,15 +358,15 @@ def _pick_tcp_rot(
                 best = (cost, R_try, try_flip)
         return best
 
-    # Never pick pitch− when pitch+ is reachable (avoids stand pitch-down).
+    # pitch+ 로 닿으면 pitch− 는 절대 고르지 않는다 (세움 자세에서 손목이 아래로 꺾이는 것 방지).
     best = _best_for_flip(False)
     if best is None:
         best = _best_for_flip(True)
     if best is not None:
         return best[1], best[2]
-    # Nothing is fully reachable (near full reach / below the base). Do not fall
-    # back to rolls[0] blindly: it can need a half turn of S6, saturate it, and
-    # bend the wrist into L4. Take the pitch+ roll that gets closest instead.
+    # 완전히 닿는 후보가 없다 (최대 도달 거리 근처 / 베이스 아래). rolls[0] 으로
+    # 그냥 돌아가지 않는다: S6 반 바퀴가 필요할 수 있고, 한계에 걸리면
+    # 손목이 L4 쪽으로 꺾인다. 대신 가장 가까이 가는 pitch+ roll 을 고른다.
     fallback: tuple[float, np.ndarray] | None = None
     for roll in rolls:
         R_try = _rot_from_pitch_roll(pitch0, roll)
@@ -426,11 +395,11 @@ def _approach_point_cad_mm(
     *,
     from_origin: bool,
 ) -> np.ndarray:
-    """Pre in CAD mm along unit ``cad_u``.
+    """단위 벡터 ``cad_u`` 를 따라 CAD mm 로 pre 위치.
 
-    Face: AABB support (x·u) + d. Origin-centered span (lx+d) is wrong when
-    the CAD origin is near one face (e.g. −X at −2 mm, +X at +40 mm).
-    Diagonal N: ``from_origin`` → just d along u.
+    면: AABB 에서 그 방향 가장 먼 점 (x·u) + d. 원점 기준 폭 (lx+d) 은
+    CAD 원점이 한쪽 면에 붙어 있으면 틀린다 (예: −X 면 −2 mm, +X 면 +40 mm).
+    대각선 N: ``from_origin`` → u 방향으로 d 만.
     """
     u = np.asarray(cad_u, dtype=float).reshape(3)
     nrm = float(np.linalg.norm(u))
@@ -458,10 +427,10 @@ def compute_auto_pre(
     kin=None,
     q=None,
 ) -> AutoPreResult:
-    """Pick approach marker; grasp = pre − a toward CAD origin.
+    """접근 표시를 고른다. grasp = pre 에서 CAD 원점 쪽으로 a.
 
-    Axis = most aligned with world +Z (|dot|). Side = that axis pointing
-    the same way as world +Z, so pre stays above the object origin.
+    축 = 월드 +Z 와 가장 나란한 축 (|dot|). 방향 = 그 축이 월드 +Z 와
+    같은 쪽을 향하는 쪽이라 pre 가 물체 원점보다 위에 있다.
     """
     T_cad = pose_to_T(np.array(place.xyz_mm), np.array(place.rpy_deg))
     R = T_cad[:3, :3]
@@ -483,8 +452,8 @@ def compute_auto_pre(
     }[axis_name]
     if float(np.dot(R @ cad_u, base_z)) < 0.0:
         cad_u = -cad_u
-    # Face axes: d past the AABB face in that direction (origin is not centered).
-    # N: still ±N·d from CAD origin (ㅅ/V).
+    # 면 축: 그 방향 AABB 면에서 d 만큼 바깥 (원점이 가운데가 아니다).
+    # N: 여전히 CAD 원점에서 ±N·d (ㅅ/V).
     p_cad_mm = _approach_point_cad_mm(
         cad_u, mins_mm, maxs_mm, d_mm, from_origin=(axis_name == "N")
     )
@@ -515,7 +484,7 @@ def compute_auto_pre(
     elif axis_name == "X":
         roll_cands = [R[:, 2], -R[:, 2]]
     elif axis_name == "Y":
-        # +N only: −N puts the jaw into the bracket on pre→grasp descent.
+        # +N 만: −N 이면 pre→grasp 로 내려갈 때 집게가 브래킷 속으로 들어간다.
         roll_cands = [n_base]
     else:  # Z
         roll_cands = [R[:, 0], -R[:, 0]]
@@ -528,7 +497,7 @@ def compute_auto_pre(
         q=q,
         prefer_min_s6_delta=True,
     )
-    # Lateral shift: same Δ on P and G so P→G stays along the approach axis.
+    # 옆으로 이동: P 와 G 를 같은 Δ 만큼 옮겨 P→G 가 접근 축 위에 있게 한다.
     shift = np.zeros(3, dtype=float)
     if axis_name == "Z":
         align = float(np.dot(R_tcp[:, 0], R[:, 0]))
@@ -580,8 +549,8 @@ def compute_auto_pre(
         if s6_alt is not None and s6_face is None:
             pick_alt = True
         elif s6_alt is not None and s6_face is not None:
-            # pitch− is ~180° from INIT and breaks P→G. Prefer pitch+ across face/alt
-            # before min |ΔS6| (which used to pick a flipped pre).
+            # pitch− 는 INIT 에서 ~180° 떨어져 P→G 가 깨진다. 면/보조 후보 모두에서 pitch+ 를
+            # min |ΔS6| 보다 먼저 고른다 (예전에는 뒤집힌 pre 를 골랐다).
             if bool(flip_alt) != bool(flip):
                 pick_alt = not bool(flip_alt)
             else:
@@ -619,39 +588,11 @@ def compute_auto_pre(
     )
 
 
-def bracket_approach_points_cad_mm(
-    mins_mm: np.ndarray,
-    maxs_mm: np.ndarray,
-    d_mm: float,
-) -> np.ndarray:
-    """Approach markers in CAD mm from CAD origin.
-
-    Face: d past the AABB face (+X/−X, ±Y, +Z/−Z).
-    Diagonal N=(1,0,1)/√2 (ㅅ/V): ±N·d from origin.
-    """
-    axes = (
-        np.array([1.0, 0.0, 0.0]),
-        np.array([0.0, 1.0, 0.0]),
-        np.array([0.0, -1.0, 0.0]),
-        np.array([0.0, 0.0, 1.0]),
-        N_CAD,
-        -N_CAD,
-    )
-    from_origin = (False, False, False, False, True, True)
-    return np.asarray(
-        [
-            _approach_point_cad_mm(u, mins_mm, maxs_mm, d_mm, from_origin=fo)
-            for u, fo in zip(axes, from_origin, strict=True)
-        ],
-        dtype=float,
-    )
-
-
 def _theta_deg_xy(x: float, y: float) -> float:
-    """atan2(y,x) in degrees for sector checks (−90°, 90°) → x > 0.
+    """부채꼴 검사용 atan2(y,x) 각도(도). (−90°, 90°) → x > 0.
 
-    Negative atan2 angles (y < 0) stay negative / are lifted above 360 so they
-    fail RANDOM_THETA_MIN/MAX, matching x=r·cosθ, y=r·sinθ sampling.
+    atan2 가 음수(y < 0)면 음수로 두거나 360 위로 올려서
+    RANDOM_THETA_MIN/MAX 검사에 걸리게 한다. x=r·cosθ, y=r·sinθ 샘플링과 맞춘다.
     """
     th = float(np.degrees(np.arctan2(y, x)))
     if th <= RANDOM_THETA_MIN_DEG:
@@ -660,13 +601,8 @@ def _theta_deg_xy(x: float, y: float) -> float:
 
 
 def _theta_in_sector(theta_deg: float) -> bool:
-    """True if θ ∈ (RANDOM_THETA_MIN_DEG, RANDOM_THETA_MAX_DEG)."""
+    """θ ∈ (RANDOM_THETA_MIN_DEG, RANDOM_THETA_MAX_DEG) 이면 True."""
     return RANDOM_THETA_MIN_DEG < float(theta_deg) < RANDOM_THETA_MAX_DEG
-
-
-def _r_max_for_theta_mm(theta_rad: float) -> float:
-    """Largest r < RANDOM_R_MAX_MM at θ (the ring is the same in every direction)."""
-    return float(RANDOM_R_MAX_MM) - 1e-3
 
 
 def _place_xy_in_region(x: float, y: float) -> bool:
@@ -677,10 +613,10 @@ def _place_xy_in_region(x: float, y: float) -> bool:
 
 
 def place_region_overlay_m(n_arc: int = 64) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Random-place XY region as a thin sheet in URDF meters.
+    """랜덤 배치 XY 영역을 URDF 미터 단위 얇은 판으로 만든다.
 
-    Returns (verts, faces, outline_xyz). Outline is (N, 3) along the outer then
-    reversed inner boundary.
+    반환: (verts, faces, outline_xyz). outline 은 (N, 3) 이고 바깥 경계,
+    그다음 안쪽 경계를 거꾸로 따라간다.
     """
     n = max(8, int(n_arc))
     thetas = np.linspace(
@@ -689,11 +625,11 @@ def place_region_overlay_m(n_arc: int = 64) -> tuple[np.ndarray, np.ndarray, np.
         n,
     )
     r_min = float(RANDOM_R_MIN_MM) / 1000.0
+    r_max = (float(RANDOM_R_MAX_MM) - 1e-3) / 1000.0
     z = 0.0008
     inner = np.empty((n, 3), dtype=float)
     outer = np.empty((n, 3), dtype=float)
     for i, th in enumerate(thetas):
-        r_max = _r_max_for_theta_mm(float(th)) / 1000.0
         c, s = float(np.cos(th)), float(np.sin(th))
         inner[i] = (r_min * c, r_min * s, z)
         outer[i] = (r_max * c, r_max * s, z)
@@ -723,7 +659,7 @@ def _place_origin_in_region(xyz_mm: np.ndarray) -> bool:
 
 
 def _mesh_above_floor(verts_cad_m: np.ndarray, place: PlacePose) -> bool:
-    """True if every CAD vertex is at project-base z ≥ −1 mm (desk contact slack)."""
+    """CAD 꼭짓점이 모두 프로젝트 베이스 z ≥ −1 mm 이면 True (책상에 닿는 여유)."""
     T = pose_to_T(np.array(place.xyz_mm), np.array(place.rpy_deg))
     pts = np.asarray(verts_cad_m, dtype=float).reshape(-1, 3)
     world = (T[:3, :3] @ pts.T).T + T[:3, 3]
@@ -731,11 +667,11 @@ def _mesh_above_floor(verts_cad_m: np.ndarray, place: PlacePose) -> bool:
 
 
 def _sample_xy_mm(rng: np.random.Generator) -> tuple[float, float] | None:
-    """One (x,y) in S1 sector ∩ (RANDOM_R_MIN_MM, RANDOM_R_MAX_MM). None if impossible."""
+    """S1 부채꼴 ∩ (RANDOM_R_MIN_MM, RANDOM_R_MAX_MM) 안의 (x,y) 하나. 불가능하면 None."""
     r_min = float(RANDOM_R_MIN_MM) + 1e-3
     theta_deg = float(rng.uniform(RANDOM_THETA_MIN_DEG + 1e-3, RANDOM_THETA_MAX_DEG - 1e-3))
     theta = np.deg2rad(theta_deg)
-    r_max = _r_max_for_theta_mm(theta)
+    r_max = float(RANDOM_R_MAX_MM) - 1e-3
     if r_max <= r_min:
         return None
     r = float(rng.uniform(r_min, r_max))
@@ -747,7 +683,7 @@ def _sample_xy_mm(rng: np.random.Generator) -> tuple[float, float] | None:
 
 
 def _R_map_axis_to_ez(u_cad: np.ndarray) -> np.ndarray:
-    """Rotation R with R @ u = +Z (project base)."""
+    """R @ u = +Z (프로젝트 베이스) 가 되는 회전 R."""
     u = np.asarray(u_cad, dtype=float).reshape(3)
     n = float(np.linalg.norm(u))
     if n < 1e-12:
@@ -758,7 +694,7 @@ def _R_map_axis_to_ez(u_cad: np.ndarray) -> np.ndarray:
 
 
 def _rpy_slant_about_s(phi_deg: float) -> tuple[float, float, float]:
-    """R = Rz(φ) @ R0, R0 maps SLANT_AXIS_CAD → +Z (ㅅ, free spin about that axis)."""
+    """R = Rz(φ) @ R0. R0 는 SLANT_AXIS_CAD → +Z (ㅅ, 그 축으로는 자유 회전)."""
     R0 = _R_map_axis_to_ez(SLANT_AXIS_CAD)
     phi = np.deg2rad(float(phi_deg))
     c, s = float(np.cos(phi)), float(np.sin(phi))
@@ -774,9 +710,9 @@ def sample_random_place(
     rng: np.random.Generator | None = None,
     max_tries: int = RANDOM_PLACE_MAX_TRIES,
 ) -> PlacePose | None:
-    """Random place. mode: None/free | stand | lie | slant (floor-safe).
+    """랜덤 배치. mode: None/free | stand | lie | slant (바닥 아래로 안 들어감).
 
-    XY always in S1 sector. Unset/free = full 6D; others lock pose family.
+    XY 는 항상 S1 부채꼴 안. 미지정/free 는 6D 전체, 나머지는 자세 종류를 고정한다.
     """
     rng = rng or np.random.default_rng()
     key = (mode or "free").strip().lower()
@@ -794,8 +730,8 @@ def sample_random_place(
             yaw = float(rng.uniform(-180.0, 180.0))
             rpy = (STAND_ROLL_DEG, STAND_PITCH_DEG, yaw)
         elif key == "lie":
-            # CAD-axis body RPY: roll=±90, yaw=0, pitch free → CAD Y ∥ ±base Z
-            # (flat ㄴ). Convert to base extrinsic for pose_to_T / yaml.
+            # CAD 축 기준 RPY: roll=±90, yaw=0, pitch 는 자유 → CAD Y ∥ ±베이스 Z
+            # (납작한 ㄴ). pose_to_T / yaml 에 쓰려고 베이스 외부 회전으로 바꾼다.
             z = LIE_Z_MM
             roll = float(rng.choice(LIE_ROLL_CHOICES_DEG))
             pitch = float(rng.uniform(-180.0, 180.0))
@@ -825,7 +761,7 @@ def object_collides_robot(
     verts_cad_m: np.ndarray,
     place: PlacePose,
 ) -> bool:
-    """AABB of placed CAD vs robot collision geometries (URDF world)."""
+    """배치한 CAD 의 AABB 와 로봇 충돌 형상 비교 (URDF 월드)."""
     import coal
 
     T_user = pose_to_T(np.array(place.xyz_mm), np.array(place.rpy_deg))

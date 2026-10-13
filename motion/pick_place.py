@@ -1,8 +1,8 @@
-"""Table pick-and-place sequence. No GUI, no YOLO.
+"""책상 위 픽앤플레이스 순서. GUI 없음, YOLO 없음.
 
-Pick uses grasp TCP RPY. Place-down yaws so TCP Rx ∥ project-base +X.
-Place Z = grasp Z.
-State is just idle/running/done/fault plus a step index — not a BT.
+집기는 grasp TCP RPY 를 쓴다. 내려놓을 때는 TCP Rx ∥ 프로젝트 베이스 +X 가 되게 yaw 를 돌린다.
+놓는 Z = 집은 Z.
+상태는 idle/running/done/fault 와 단계 번호뿐이다 — 행동 트리(BT)가 아니다.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ GRIPPER_OPEN_100 = 30.0
 GRIPPER_CLOSE_100 = 0.0
 # 스텝과 스텝 사이 대기 (초). 0 이면 바로 다음.
 STEP_PAUSE_S = 1.0
-# Joint go-to reports this when already there — treat as success.
+# 관절 go-to 가 이미 도착해 있으면 이 문구를 낸다 — 성공으로 본다.
 _ALREADY = "already at joint target"
 
 
@@ -87,7 +87,7 @@ class PickPlaceRunner:
         self.ctrl.stop_all()
 
     def tick(self) -> str:
-        """Call from the GUI loop. Returns idle|running|done|fault."""
+        """GUI 루프에서 부른다. idle|running|done|fault 를 돌려준다."""
         if self._phase != "running":
             return self._phase
         if int(self.ctrl.interrupt_id()) != int(self._interrupt):
@@ -169,9 +169,9 @@ class PickPlaceRunner:
 
 
 def rpy_tcp_rx_parallel_base_x(rpy_deg: np.ndarray) -> np.ndarray:
-    """Keep grasp pitch as far as possible; set TCP X exactly ∥ project-base X.
+    """grasp 의 pitch 는 최대한 유지하고, TCP X 를 프로젝트 베이스 X 와 정확히 나란하게 한다.
 
-    Sign of TCP X (and 180° about X) is the one closer to ``rpy_deg``.
+    TCP X 의 부호 (와 X 축 180° 회전)는 ``rpy_deg`` 에 더 가까운 쪽을 고른다.
     """
     R0 = rpy_deg_to_rotmat(float(rpy_deg[0]), float(rpy_deg[1]), float(rpy_deg[2]))
     y0 = np.asarray(R0[:, 1], dtype=float)
@@ -212,7 +212,7 @@ def build_pick_place_steps(
     pick_lift_mm: float = PICK_LIFT_MM,
     place_approach_mm: float = PLACE_APPROACH_MM,
 ) -> list[PickPlaceStep]:
-    """Linear table pick-and-place. Place Z from grasp TCP; place RPY aligns TCP Rx ∥ base X."""
+    """직선 픽앤플레이스. 놓는 Z 는 집기 TCP 에서, 놓는 RPY 는 TCP Rx ∥ 베이스 X."""
     p_xyz = np.asarray(p_xyz_mm, dtype=float).reshape(3)
     g_xyz = np.asarray(g_xyz_mm, dtype=float).reshape(3)
     p_rpy = np.asarray(p_rpy_deg, dtype=float).reshape(3)

@@ -54,11 +54,16 @@ from vision.transforms import (
     transform_plane,
 )
 
+# capture.py 가 png + json 쌍을 저장하는 폴더.
 SAMPLES_DIR = CALIB_DIR / "handeye_tcp"
 GRIPPER_FRAME = "tcp"
+# 유효 샘플이 이보다 적으면 풀지 않는다. 권장 촬영 수는 RECOMMENDED.
 MIN_SOLVE = 12
 RECOMMENDED = 20
+# 보드 코너 재투영 오차가 이보다 크면 그 사진은 버린다 (픽셀).
 PNP_RMS_MAX_PX = 0.8
+
+# OpenCV 가 제공하는 손눈 풀이 방법들. 모두 풀어 보고 잔차가 가장 작은 것을 고른다.
 
 _HANDEYE_METHODS = (
     ("park", "CALIB_HAND_EYE_PARK"),
@@ -70,10 +75,16 @@ _HANDEYE_METHODS = (
 
 
 def list_samples(samples_dir: Path) -> list[Path]:
+    """샘플 사진 목록 (이름 순)."""
     return sorted(samples_dir.glob("*.png"))
 
 
 def calibrate_hand_eye(R_g2b, t_g2b, R_t2c, t_t2c, method=None):
+    """cv2.calibrateHandEye 를 부른다. 기본 방법은 Park.
+
+    OpenCV 에 그 함수가 없으면 같은 문제 (AX = XB) 를 직접 푼다:
+    샘플 쌍마다 상대 회전을 구해 회전을 먼저 맞추고, 이동은 최소제곱으로 구한다.
+    """
     fn = getattr(cv2, "calibrateHandEye", None)
     if fn is not None:
         kw = {}
@@ -82,6 +93,7 @@ def calibrate_hand_eye(R_g2b, t_g2b, R_t2c, t_t2c, method=None):
         else:
             kw["method"] = cv2.CALIB_HAND_EYE_PARK
         return fn(R_g2b, t_g2b, R_t2c, t_t2c, **kw)
+    # 아래는 OpenCV 함수가 없을 때만 쓰는 대체 풀이.
     n = len(R_g2b)
     Hg = [rt_to_T(R_g2b[i], t_g2b[i]) for i in range(n)]
     Hc = [rt_to_T(R_t2c[i], t_t2c[i]) for i in range(n)]
@@ -97,6 +109,7 @@ def calibrate_hand_eye(R_g2b, t_g2b, R_t2c, t_t2c, method=None):
             pairs.append((Hgij, Hcij))
     if len(pairs) < 2:
         raise RuntimeError("Hand-eye 실패 (회전 부족). 끝단을 30° 이상 돌려 다시 찍으세요.")
+    # 회전: 상대 회전축들을 가장 잘 맞추는 R 을 구한 뒤 SVD 로 진짜 회전 행렬로 다듬는다.
     w, V = np.linalg.eigh(M.T @ M)
     w, V = w[::-1], V[:, ::-1]
     R = V @ np.diag(1.0 / np.sqrt(np.maximum(w, 1e-12))) @ V.T @ M.T
@@ -105,6 +118,7 @@ def calibrate_hand_eye(R_g2b, t_g2b, R_t2c, t_t2c, method=None):
     if np.linalg.det(R) < 0:
         U[:, -1] *= -1
         R = U @ Vt
+    # 이동: (I - Rg) t = tg - R tc 를 모든 쌍에 대해 최소제곱으로 푼다.
     C = np.vstack([np.eye(3) - Hgij[:3, :3] for Hgij, _ in pairs])
     d = np.concatenate([Hgij[:3, 3] - R @ Hcij[:3, 3] for Hgij, Hcij in pairs])
     t = np.linalg.lstsq(C, d, rcond=None)[0]
@@ -112,6 +126,12 @@ def calibrate_hand_eye(R_g2b, t_g2b, R_t2c, t_t2c, method=None):
 
 
 def solve_eye_to_hand(T_base_tcp_list, T_cam_board_list, method=None) -> np.ndarray:
+    """로봇 TCP 자세들과 카메라가 본 보드 자세들 → T_base_cam (mm).
+
+    카메라가 고정이고 보드가 팔 끝에 달린 eye-to-hand 구성이다.
+    OpenCV 함수는 eye-in-hand 용이라, TCP 자세를 뒤집어 (T_tcp_base) 넣으면
+    결과로 카메라의 베이스 기준 자세가 나온다.
+    """
     if len(T_base_tcp_list) != len(T_cam_board_list):
         raise ValueError("tcp 포즈 수와 보드 포즈 수가 다릅니다.")
     if len(T_base_tcp_list) < 3:
@@ -129,6 +149,11 @@ def solve_eye_to_hand(T_base_tcp_list, T_cam_board_list, method=None) -> np.ndar
 
 
 def robust_pnp(obj, img, K, dist):
+    """보드 3D 점과 사진 2D 점으로 카메라 기준 보드 자세를 구한다.
+
+    RANSAC 으로 이상한 점을 거르고, 남은 점으로 LM 다듬기를 한다.
+    반환: (rvec, tvec, 사용한 점 수, 재투영 RMS 픽셀). 점이 70% 미만으로 남으면 None.
+    """
     obj = np.asarray(obj, dtype=np.float32).reshape(-1, 3)
     img = np.asarray(img, dtype=np.float32).reshape(-1, 2)
     ok, rvec, tvec, inliers = cv2.solvePnPRansac(
@@ -155,6 +180,7 @@ def robust_pnp(obj, img, K, dist):
 
 
 def mean_rigid(transforms):
+    """4x4 변환 여러 개의 평균. 회전은 SVD 로 평균 내고, 이동은 중앙값."""
     result = np.eye(4)
     R_sum = np.sum([T[:3, :3] for T in transforms], axis=0)
     U, _, Vt = np.linalg.svd(R_sum)
@@ -167,13 +193,24 @@ def mean_rigid(transforms):
 
 
 def robust_limit(values, floor):
+    """이상치 기준값: 중앙값 + 3·MAD. 기준이 너무 빡빡하지 않게 floor 아래로는 내리지 않는다."""
     med = float(np.median(values))
     mad = 1.4826 * float(np.median(np.abs(values - med)))
     return max(floor, med + 3.0 * max(mad, 1e-6))
 
 
 def compute(samples_dir: Path) -> np.ndarray:
+    """저장된 샘플로 T_base_cam 을 구해 저장하고 돌려준다.
+
+    순서:
+    1. 사진마다 ChArUco 보드를 찾고 PnP 로 카메라 기준 보드 자세를 구한다.
+    2. 전체로 한 번 풀고, 잔차가 큰 사진을 이상치로 뺀다.
+    3. 남은 사진으로 OpenCV 방법 5가지를 모두 풀어 잔차가 가장 작은 것을 고른다.
+    4. 한 장씩 빼고 다시 풀어서 (leave-one-out) 결과가 얼마나 흔들리는지 본다.
+    5. 결과와 품질 지표를 JSON 으로 저장한다.
+    """
     K_raw, dist_raw, k_path = load_intrinsics()
+    # 카메라를 180° 돌려 달았으므로 렌즈 중심 (cx, cy) 도 돌린 값을 쓴다.
     K, dist = intrinsics_for_rotate180(K_raw, dist_raw, FRAME_WIDTH, FRAME_HEIGHT)
     print(
         f"PnP 180°  cx={K[0, 2]:.2f} cy={K[1, 2]:.2f}  "
@@ -185,6 +222,7 @@ def compute(samples_dir: Path) -> np.ndarray:
     T_base_tcp_list = []
     reprojection_rms = []
 
+    # 1. 사진마다 보드 자세를 구한다. 문제 있는 사진은 이유를 출력하고 건너뛴다.
     for png in list_samples(samples_dir):
         meta_path = png.with_suffix(".json")
         if not meta_path.is_file():
@@ -215,6 +253,7 @@ def compute(samples_dir: Path) -> np.ndarray:
             print("skip", png.name, f"reprojection RMS={rms:.3f}px")
             continue
         T_cam_board_list.append(rt_to_T(cv2.Rodrigues(rvec)[0], tvec))
+        # 예전 좌표계로 저장된 샘플도 지금 베이스 좌표로 바꿔서 쓴다.
         T_base_tcp_list.append(
             T_user_from_stored(np.asarray(meta["T_base_tcp"], dtype=float), meta.get("base_frame"))
         )
@@ -236,6 +275,10 @@ def compute(samples_dir: Path) -> np.ndarray:
         )
 
     def tcp_board_residuals(T_base_cam, indices):
+        """TCP 에서 본 보드 자세가 사진마다 얼마나 다른지 (mm, 도).
+
+        보드는 TCP 에 고정돼 있으므로 답이 맞으면 모든 사진에서 같아야 한다.
+        """
         transforms = [
             invert_T(T_base_tcp_list[i]) @ T_base_cam @ T_cam_board_list[i]
             for i in indices
@@ -250,6 +293,7 @@ def compute(samples_dir: Path) -> np.ndarray:
         )
         return transforms, center, t_error, r_error
 
+    # 2. 전체로 한 번 풀고 잔차가 큰 사진을 뺀다. 최소 기준은 5 mm, 2°.
     all_indices = list(range(n_detected))
     T_initial = calibrate_indices(all_indices)
     _, _, t_error0, r_error0 = tcp_board_residuals(T_initial, all_indices)
@@ -266,6 +310,7 @@ def compute(samples_dir: Path) -> np.ndarray:
             f"이상치 제거 후 {len(keep)}장. 보드 고정과 토크 ON 정지를 확인하고 다시 찍으세요."
         )
 
+    # 3. 방법마다 풀어 보고 점수 (평균 mm + 2 × 평균 도) 가 가장 작은 것을 고른다.
     method_name = "park"
     T_base_cam = calibrate_indices(keep)
     if getattr(cv2, "calibrateHandEye", None) is not None:
@@ -291,6 +336,7 @@ def compute(samples_dir: Path) -> np.ndarray:
         print("선택", method_name)
     _, T_tb_mean, t_error, r_error = tcp_board_residuals(T_base_cam, keep)
 
+    # 4. leave-one-out: 한 장씩 빼고 풀었을 때 답이 크게 바뀌면 그 사진에 많이 기대고 있는 것이다.
     loo_trans_error = []
     loo_rot_error = []
     for removed in keep:
@@ -324,6 +370,7 @@ def compute(samples_dir: Path) -> np.ndarray:
     print("leave-one-out T 변화 mm max", round(float(np.max(loo_trans_error)), 2))
     print("leave-one-out R 변화 deg max", round(float(np.max(loo_rot_error)), 3))
 
+    # 5. 결과와 품질 지표를 함께 저장한다.
     payload = {
         "frame": "T_base_cam",
         "base_frame": USER_BASE_FRAME,
@@ -359,6 +406,7 @@ def compute(samples_dir: Path) -> np.ndarray:
 
 
 def _mean_plane(planes: list[np.ndarray]) -> np.ndarray:
+    """평면 ax+by+cz+d=0 여러 개의 평균. 법선 방향을 첫 평면에 맞춘 뒤 평균 낸다."""
     ns = []
     ds = []
     ref = None
@@ -380,6 +428,7 @@ def _mean_plane(planes: list[np.ndarray]) -> np.ndarray:
 
 
 def grab_desk_plane_cam(*, frames: int = 8) -> np.ndarray:
+    """카메라로 빈 책상을 여러 번 찍어 RANSAC 평면을 구하고 평균 낸다 (카메라 좌표)."""
     from vision.calib import load_K, intrinsics_for_rotate180
     from vision.camera import FRAME_HEIGHT, FRAME_WIDTH, ROTATE_180
     from yolo.pose.depth_cloud import fit_plane_ransac, open_orbbec, points_from_mask, rotate180
@@ -421,6 +470,7 @@ def grab_desk_plane_cam(*, frames: int = 8) -> np.ndarray:
 
 
 def _parse_plane4(text: str) -> np.ndarray:
+    """--desk-plane 문자열 "a,b,c,d" → 숫자 4개."""
     vals = [float(x) for x in str(text).replace(",", " ").split()]
     if len(vals) != 4:
         raise SystemExit(f"--desk-plane 은 a,b,c,d 4개여야 합니다. 지금 {len(vals)}개")
@@ -428,6 +478,7 @@ def _parse_plane4(text: str) -> np.ndarray:
 
 
 def _write_aligned(path: Path, T_new: np.ndarray, tilt_old: float, tilt_new: float, z0: float) -> Path:
+    """책상 맞춤 결과를 기존 손눈 JSON 에 덮어 쓴다. 맞추기 전후 기울기도 남긴다."""
     data = json.loads(path.read_text(encoding="utf-8"))
     data["T_base_cam"] = T_new.tolist()
     data["t_base_cam_mm"] = T_new[:3, 3].tolist()
@@ -441,6 +492,11 @@ def _write_aligned(path: Path, T_new: np.ndarray, tilt_old: float, tilt_new: flo
 
 
 def align_desk(desk_plane_base: np.ndarray | None = None) -> np.ndarray:
+    """T_base_cam 의 회전만 고쳐서 책상 평면이 로봇 XY 와 나란하게 한다.
+
+    로봇이 책상에 평평하게 놓였다는 가정이다. desk_plane_base 를 주면 카메라 없이
+    그 평면 (베이스 좌표) 을 쓰고, 없으면 카메라로 빈 책상을 찍는다.
+    """
     T_old, path = load_T_base_cam()
     print("T", path)
     if desk_plane_base is not None:
@@ -465,6 +521,7 @@ def align_desk(desk_plane_base: np.ndarray | None = None) -> np.ndarray:
     tilt_new = plane_tilt_from_z_deg(plane_new)
     n = np.asarray(plane_new[:3], dtype=np.float64)
     n = n / max(float(np.linalg.norm(n)), 1e-12)
+    # 맞춘 뒤 베이스 원점 바로 위/아래에서 책상 높이. 0 에 가까울수록 좋다.
     z0 = -float(plane_new[3]) / n[2] if abs(float(n[2])) > 1e-6 else float("nan")
     print(f"책상 vs 로봇 XY  {tilt_old:.2f}° → {tilt_new:.2f}°")
     print("카메라 원점 in base mm", np.round(T_new[:3, 3], 2))

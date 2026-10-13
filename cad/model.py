@@ -22,7 +22,7 @@ DEFAULT_GRASP_RPY_DEG = (0.0, 0.0, 0.0)
 DEFAULT_GRIPPER = 50.0
 DEFAULT_DROP_XY_MM = (150.0, -100.0)
 DEFAULT_APPROACH_D_MM = 10.0
-DEFAULT_APPROACH_A_MM = 30.0  # pre → grasp along axis (mm toward CAD origin)
+DEFAULT_APPROACH_A_MM = 30.0  # 접근 축을 따라 pre → grasp 거리 (CAD 원점 쪽으로, mm)
 
 
 def read_yaml(path: Path = CAD_YAML) -> dict:

@@ -81,7 +81,7 @@ def _quiet_gtk() -> None:
 
 
 def put_kr_lines(bgr: np.ndarray, lines: list[str], *, origin=(16, 16), size=32) -> np.ndarray:
-    """Hangul overlay. Hershey putText cannot draw Korean."""
+    """한글 글자 덧그리기. Hershey putText 는 한글을 못 그린다."""
     from PIL import Image, ImageDraw, ImageFont
 
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -272,7 +272,7 @@ def capture_loop(samples_dir: Path) -> None:
                     "corners": det.n_corners,
                     "xyz_read_span_mm": xyz_span,
                     "rpy_read_span_deg": rpy_span,
-                    # Pendant err: cmd−meas TCP, project base (same as GUI Δx/Δy/Δz).
+                    # 펜던트 오차: 명령−실측 TCP, 프로젝트 베이스 (GUI Δx/Δy/Δz 와 같음).
                     "ee_err_mm": ee_err,
                     "err_xyz_mm": err_xyz,
                     "board": {

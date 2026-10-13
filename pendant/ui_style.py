@@ -1,8 +1,8 @@
-"""Pendant UI font and button defaults.
+"""펜던트 UI 글꼴과 버튼 기본값.
 
-conda's Tk is built without Xft, so it never sees Noto and Korean falls back to
-the bitmap font ``fixed``. The system Tk is Xft-enabled. Load that library
-before tkinter, and point Tk at the matching system script directory.
+conda 의 Tk 는 Xft 없이 빌드되어 Noto 를 못 보고, 한글이 비트맵 글꼴
+``fixed`` 로 나온다. 시스템 Tk 는 Xft 를 쓴다. tkinter 보다 먼저 그 라이브러리를
+읽고, Tk 가 맞는 시스템 스크립트 폴더를 보게 한다.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ _enabled = False
 
 
 def enable_xft_tk() -> bool:
-    """Load system Xft Tk before tkinter is imported. Safe to call more than once."""
+    """tkinter 를 import 하기 전에 시스템 Xft Tk 를 읽는다. 여러 번 불러도 된다."""
     global _enabled
     if _enabled:
         return True
@@ -43,7 +43,7 @@ def enable_xft_tk() -> bool:
 
 
 def apply_ui_theme() -> None:
-    """Default CustomTkinter text to Noto Sans CJK KR and round buttons a bit more."""
+    """CustomTkinter 기본 글꼴을 Noto Sans CJK KR 로, 버튼은 조금 더 둥글게."""
     import customtkinter as ctk
     from customtkinter.windows.widgets.theme import ThemeManager
 
@@ -59,7 +59,7 @@ def apply_ui_theme() -> None:
 
 
 def apply_root_fonts(root) -> None:
-    """Named Tk fonts (entries, dialogs) follow the same families."""
+    """이름 있는 Tk 글꼴 (입력 칸, 대화 상자) 도 같은 글꼴로 맞춘다."""
     import tkinter as tk
     import tkinter.font as tkfont
 

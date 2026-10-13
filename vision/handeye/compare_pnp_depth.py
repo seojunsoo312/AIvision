@@ -46,7 +46,7 @@ Z_MIN_MM = 80.0
 Z_MAX_MM = 1800.0
 
 WIN = "pnp vs depth"
-PATCH = 1  # 3×3 = radius 1
+PATCH = 1  # 3×3 = 반지름 1
 
 
 def _colorize_depth(depth_mm: np.ndarray) -> np.ndarray:

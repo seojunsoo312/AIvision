@@ -138,7 +138,7 @@ def _xy_grid(
     z: float = 0.0,
     color=(0.35, 0.35, 0.38),
 ):
-    """Working-frame XY plane (z=constant). Same origin as the axis triad."""
+    """작업 좌표 XY 평면 (z=상수). 좌표축과 같은 원점."""
     return _grid_on_uv(
         np.array([0.0, 0.0, z]),
         np.array([1.0, 0.0, 0.0]),
@@ -157,7 +157,7 @@ def _desk_grid(
     step_mm: float,
     color=(0.95, 0.75, 0.15),
 ):
-    """ax+by+cz+d=0 in the same frame as the point cloud."""
+    """점군과 같은 좌표계의 평면 ax+by+cz+d=0."""
     n = np.asarray(plane[:3], dtype=np.float64).reshape(3)
     length = float(np.linalg.norm(n))
     if length < 1e-12:
@@ -205,9 +205,9 @@ def _geometries(
     center = np.asarray(bounds.get_center(), dtype=float)
     reach = float(np.linalg.norm(center[:2])) + 0.5 * float(np.linalg.norm(extent[:2]))
     half = max(0.5 * diagonal, reach, 80.0)
-    step = max(round(half / 8.0 / 5.0) * 5.0, 10.0)  # ~8 divisions, 5 mm snap
+    step = max(round(half / 8.0 / 5.0) * 5.0, 10.0)  # 눈금 ~8칸, 5 mm 단위로 맞춤
     if show_grid:
-        # Cover origin triad + reach toward the cloud (camera clouds sit far on +Z).
+        # 원점 좌표축과 점군 쪽까지 덮는다 (카메라 점군은 +Z 로 멀리 있다).
         extras.append(_xy_grid(half_mm=half, step_mm=step, z=0.0))
     if desk_plane is not None:
         extras.append(

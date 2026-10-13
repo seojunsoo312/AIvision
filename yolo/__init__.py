@@ -1,1 +1,1 @@
-"""Pose-class YOLO (`train/`) and instance pose (`pose/`)."""
+"""자세 클래스 YOLO (`train/`) 와 물체별 자세 추정 (`pose/`)."""

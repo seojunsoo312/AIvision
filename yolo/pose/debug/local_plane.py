@@ -24,7 +24,7 @@ def top_slice(
     heights: np.ndarray,
     band_mm: float = SLICE_MM,
 ) -> np.ndarray:
-    """Keep points near the 95th-percentile height (side walls drop out)."""
+    """높이 95 백분위 근처 점만 남긴다 (옆 벽은 빠진다)."""
     h = np.asarray(heights, dtype=np.float64).reshape(-1)
     if len(h) == 0:
         return np.zeros(len(xyz), dtype=bool)
@@ -33,7 +33,7 @@ def top_slice(
 
 
 def project_to_plane(xyz: np.ndarray, plane: np.ndarray) -> np.ndarray:
-    """3D points → 2D coords in a plane frame (origin = centroid, z = normal)."""
+    """3D 점 → 평면 좌표계의 2D 좌표 (원점 = 무게중심, z = 법선)."""
     pts = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
     n = np.asarray(plane[:3], dtype=np.float64)
     n = n / max(float(np.linalg.norm(n)), 1e-12)
@@ -50,7 +50,7 @@ def project_to_plane(xyz: np.ndarray, plane: np.ndarray) -> np.ndarray:
 
 
 def pca_xy(xy: np.ndarray) -> dict | None:
-    """2D PCA. yaw_deg in [-90, 90), 180° period."""
+    """2D PCA. yaw_deg 는 [-90, 90), 180° 주기."""
     pts = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
     if len(pts) < 3:
         return None
@@ -94,7 +94,7 @@ def local_pose(
     band_mm: float = SLICE_MM,
     in_base: bool = False,
 ) -> dict | None:
-    """Top-slice → local plane → yaw on that plane. xyz already in working frame."""
+    """윗면 조각 → 국소 평면 → 그 평면 위 yaw. xyz 는 이미 작업 좌표."""
     pts = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
     if len(pts) < MIN_SLICE_POINTS:
         return None

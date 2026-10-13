@@ -1,4 +1,4 @@
-"""Meshcat debug view. display(q) only — no IK, no input."""
+"""Meshcat 디버그 화면. display(q) 만 한다 — IK 없음, 입력 없음."""
 
 from __future__ import annotations
 
@@ -24,17 +24,17 @@ from pinocchio.visualize import MeshcatVisualizer
 from motion.base_frame import T_urdf_from_user_matrix
 from motion.robot_kinematics import RobotKinematics
 
-# Browser tab title (meshcat hardcodes "MeshCat" in viewer/dist/index.html).
+# 브라우저 탭 제목 (meshcat 은 viewer/dist/index.html 에 "MeshCat" 을 박아 둠).
 PAGE_TITLE = "시뮬레이터"
 
-# Meshcat OrbitControls always orbit world origin. Do not translate
-# /Cameras/default — that parent offset makes pan/orbit/dolly fight the target.
-# Camera lives in an Rx(+90°) frame; default convention is (x, z, 0) like (3, 1, 0).
-# Closer copy of that so the ~0.4 m arm fills the view.
-# Project base axes (overlay): +X forward; see motion/base_frame.py.
+# Meshcat OrbitControls 는 항상 월드 원점을 중심으로 돈다. /Cameras/default 를
+# 옮기지 않는다 — 부모가 옮겨지면 이동·회전·확대가 목표점과 어긋난다.
+# 카메라는 Rx(+90°) 프레임 안에 있다. 기본 관례는 (3, 1, 0) 처럼 (x, z, 0).
+# 그것을 더 가깝게 해서 ~0.4 m 팔이 화면을 채우게 한다.
+# 프로젝트 베이스 축 (오버레이): +X 앞. motion/base_frame.py 참고.
 CAM_POSITION = (0.70, 0.32, 0.0)
-# Robot and overlays share the URDF frame, same as main. A view-only yaw
-# here spins the arm away from the mat and the pre-grasp marker.
+# 로봇과 오버레이는 main 과 같은 URDF 프레임을 쓴다. 여기서 보기 전용 yaw 를 주면
+# 팔이 매트와 대기 표시에서 돌아가 버린다.
 ROBOT_VIEW_YAW_RAD = 0.0
 OVERLAY_ROOT = "teach"
 TCP_TRAIL_SEC = 10.0
@@ -43,13 +43,13 @@ TCP_TRAIL_COLOR = 0xFB923C
 # 기본 /Axes 를 다시 숨기는 주기. 매 프레임 하면 display 가 5ms 더 걸린다.
 AXES_REHIDE_S = 2.0
 
-# RGB matching meshcat.geometry.triad (X red, Y green, Z blue).
+# meshcat.geometry.triad 와 같은 RGB (X 빨강, Y 초록, Z 파랑).
 _AXIS_COLORS = (0xE53935, 0x43A047, 0x1E88E8)
-# Cylinder axes (Three.js Cylinder = +Y). Thickness in meters.
+# 원기둥 축 (Three.js Cylinder = +Y). 두께는 미터.
 _AXIS_RADIUS_M = 0.0018
 _AXIS_RADIUS_BASE_M = 0.0022
 
-# Unit-box stroke glyphs in XY (normalized ±0.5). Scaled later.
+# XY 단위 상자 안의 획 글자 (±0.5 정규화). 나중에 크기를 맞춘다.
 _GLYPHS: dict[str, tuple[tuple[float, float, float, float], ...]] = {
     "X": ((-0.5, -0.5, 0.5, 0.5), (-0.5, 0.5, 0.5, -0.5)),
     "Y": ((-0.5, 0.5, 0.0, 0.0), (0.5, 0.5, 0.0, 0.0), (0.0, 0.0, 0.0, -0.5)),
@@ -68,7 +68,7 @@ _GLYPHS: dict[str, tuple[tuple[float, float, float, float], ...]] = {
         (0.45, 0.5, 0.45, 0.05),
         (0.45, 0.05, -0.5, 0.05),
     ),
-    "B": (  # base
+    "B": (  # 기본
         (-0.5, -0.5, -0.5, 0.5),
         (-0.5, 0.5, 0.35, 0.5),
         (0.35, 0.5, 0.35, 0.05),
@@ -81,7 +81,7 @@ _GLYPHS: dict[str, tuple[tuple[float, float, float, float], ...]] = {
 
 
 def _glyph_points(letter: str, *, size: float) -> np.ndarray:
-    """Stroke glyph → (3, N) LineSegments positions in local XY."""
+    """획 글자 → 로컬 XY 의 (3, N) LineSegments 좌표."""
     key = letter.upper()
     segs = _GLYPHS.get(key)
     if segs is None:
@@ -95,7 +95,7 @@ def _glyph_points(letter: str, *, size: float) -> np.ndarray:
 
 
 def _robot_view_matrix() -> np.ndarray:
-    """Rz(ROBOT_VIEW_YAW_RAD) about the shared origin."""
+    """공유 원점에서 Rz(ROBOT_VIEW_YAW_RAD)."""
     c, s = float(np.cos(ROBOT_VIEW_YAW_RAD)), float(np.sin(ROBOT_VIEW_YAW_RAD))
     T = np.eye(4)
     T[:3, :3] = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
@@ -103,35 +103,35 @@ def _robot_view_matrix() -> np.ndarray:
 
 
 def _cylinder_axis_T(axis: int, length: float) -> np.ndarray:
-    """Three.js CylinderGeometry is along +Y, centered. Map to +X/+Y/+Z from origin."""
+    """Three.js CylinderGeometry 는 +Y 방향, 가운데 기준. 원점에서 +X/+Y/+Z 로 옮긴다."""
     L = float(length)
     T = np.eye(4)
-    if axis == 0:  # +Y → +X : Rz(-90°), shift +X by L/2
+    if axis == 0:  # +Y → +X : Rz(-90°), +X 로 L/2 이동
         T[:3, :3] = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
         T[0, 3] = L / 2.0
-    elif axis == 1:  # already +Y
+    elif axis == 1:  # 이미 +Y
         T[1, 3] = L / 2.0
-    else:  # +Y → +Z : Rx(+90°), shift +Z by L/2
+    else:  # +Y → +Z : Rx(+90°), +Z 로 L/2 이동
         T[:3, :3] = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
         T[2, 3] = L / 2.0
     return T
 
 
 def _axis_label_transform(axis: int, scale: float, letter_size: float) -> np.ndarray:
-    """Letter just past the axis tip, drawn in a plane readable from that tip."""
+    """축 끝 바로 바깥에 글자를 그 끝에서 읽히는 평면으로 그린다."""
     T = np.eye(4)
     tip = float(scale) + 0.55 * float(letter_size)
     T[axis, 3] = tip
-    if axis == 0:  # +X → letter in YZ (Ry(-90°))
+    if axis == 0:  # +X → 글자는 YZ 평면 (Ry(-90°))
         T[:3, :3] = np.array([[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
-    elif axis == 1:  # +Y → letter in XZ (Rx(+90°))
+    elif axis == 1:  # +Y → 글자는 XZ 평면 (Rx(+90°))
         T[:3, :3] = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
-    # +Z: letter stays in XY
+    # +Z: 글자는 XY 평면 그대로
     return T
 
 
 def _meshcat_viewer_root(title: str) -> str:
-    """Copy meshcat's viewer dist and replace the HTML <title>."""
+    """meshcat 뷰어 dist 를 복사하고 HTML <title> 을 바꾼다."""
     import meshcat
 
     src = Path(meshcat.__file__).resolve().parent / "viewer" / "dist"
@@ -144,7 +144,7 @@ def _meshcat_viewer_root(title: str) -> str:
             text = text.replace("<title>MeshCat</title>", f"<title>{html.escape(title)}</title>", 1)
             target.write_text(text, encoding="utf-8")
         elif path.is_file():
-            # Copy, not symlink: tornado >= 6.5 answers 403 for symlinks leaving the root.
+            # 심볼릭 링크 말고 복사: tornado 6.5 이상은 루트 밖을 가리키는 링크에 403 을 준다.
             shutil.copy2(path, target)
     return str(dst)
 
@@ -197,7 +197,7 @@ def _close_browser_window(title: str) -> None:
 
 
 def _start_meshcat_server(zmq_url=None, server_args=None):
-    """Same as meshcat's launcher, but serve our titled index.html."""
+    """meshcat 런처와 같지만 제목을 바꾼 index.html 을 내보낸다."""
     from meshcat.servers.zmqserver import match_web_url, match_zmq_url
 
     root = _meshcat_viewer_root(PAGE_TITLE)
@@ -268,7 +268,7 @@ class Visualizer:
         self._viz.viewer["SO101_6DOF"].set_transform(_robot_view_matrix())
         self._viz.displayCollisions(False)
         self._viz.displayVisuals(True)
-        # TCP axes (body-fixed on L6 / wrist_roll, not the moving jaw).
+        # TCP 축 (L6 / wrist_roll 에 고정, 움직이는 집게가 아님).
         self._viz.displayFrames(True, frame_ids=[kinematics.ee_frame_id], axis_length=0.06)
         self._set_initial_camera()
         self._align_floor_axes()
@@ -284,7 +284,7 @@ class Visualizer:
         self._axes_hidden_t = time.monotonic()
 
     def _mark_origin(self) -> None:
-        """Red sphere at shared URDF / project-base origin (0,0,0)."""
+        """URDF / 프로젝트 베이스 공통 원점 (0,0,0) 의 빨간 구."""
         node = self._viz.viewer["origin"]
         node.set_object(
             g.Sphere(0.002),
@@ -342,26 +342,6 @@ class Visualizer:
             ),
         )
 
-    def set_overlay_box(
-        self,
-        name: str,
-        lengths_m: tuple[float, float, float],
-        T: np.ndarray,
-        *,
-        color: int = 0x3A3A40,
-        opacity: float = 0.5,
-    ) -> None:
-        node = self._overlay(name)
-        node.set_object(
-            g.Box([float(lengths_m[0]), float(lengths_m[1]), float(lengths_m[2])]),
-            g.MeshLambertMaterial(
-                color=int(color),
-                opacity=float(opacity),
-                transparent=True,
-            ),
-        )
-        node.set_transform(np.asarray(T, dtype=float))
-
     def set_overlay_axes(
         self,
         name: str,
@@ -372,7 +352,7 @@ class Visualizer:
         tag: str | None = None,
         radius_m: float | None = None,
     ) -> None:
-        """RGB triad as thick cylinders. labels → tip X/Y/Z (off by default)."""
+        """굵은 원기둥 RGB 좌표축. labels → 끝에 X/Y/Z 글자 (기본은 끔)."""
         root = self._overlay(name)
         root.set_transform(np.asarray(T, dtype=float))
         for child in ("axes", "ax_X", "ax_Y", "ax_Z", "label_X", "label_Y", "label_Z", "tag"):
@@ -421,7 +401,7 @@ class Visualizer:
         self._overlay(name).set_transform(np.asarray(T, dtype=float))
 
     def clear_overlay(self, name: str) -> None:
-        """Remove an overlay subtree (axes, mesh, spheres, …)."""
+        """오버레이 하위 트리 (축, 메시, 구 등) 를 지운다."""
         try:
             self._overlay(name).delete()
         except Exception:
@@ -447,7 +427,7 @@ class Visualizer:
         color: int = 0xFACC15,
         closed: bool = False,
     ) -> None:
-        """Polyline in world meters. points are (3, N) or (N, 3)."""
+        """월드 미터 좌표의 꺾은선. points 는 (3, N) 또는 (N, 3)."""
         pts = np.asarray(points_m, dtype=np.float32)
         if pts.ndim != 2:
             raise ValueError("points_m must be 2D")
@@ -480,7 +460,7 @@ class Visualizer:
         color: int = 0x1E88E8,
         colors: list[int] | tuple[int, ...] | None = None,
     ) -> None:
-        """Spheres at world positions (m). Optional per-sphere colors."""
+        """월드 위치(m)에 구를 그린다. 구마다 색을 줄 수 있다."""
         root = self._overlay(name)
         centers = np.asarray(centers_m, dtype=float).reshape(-1, 3)
         r = float(radius_m)

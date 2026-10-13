@@ -98,24 +98,6 @@ def _load_grasp_cad() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return _pose_mm_to_T(xyz, rpy), xyz, rpy
 
 
-def _tcp_from_cad(T_work_cad: np.ndarray, T_cad_grasp: np.ndarray):
-    """T_work_grasp = T_work_cad @ T_cad_grasp → xyz mm, rpy deg."""
-    from yolo.pose.register import T_to_xyzrpy
-
-    Tg = np.asarray(T_cad_grasp, dtype=np.float64).reshape(4, 4)
-    Tw = np.asarray(T_work_cad, dtype=np.float64).reshape(4, 4)
-    if np.allclose(Tg, np.eye(4), atol=1e-9):
-        return T_to_xyzrpy(Tw)
-    return T_to_xyzrpy(Tw @ Tg)
-
-
-def _xyz_in_cad(T_work_cad: np.ndarray, xyz_work: np.ndarray) -> np.ndarray:
-    """작업 프레임 점 → 물체(CAD) 기준 좌표."""
-    T_cw = invert_T(np.asarray(T_work_cad, dtype=np.float64).reshape(4, 4))
-    p = np.asarray(xyz_work, dtype=np.float64).reshape(3)
-    return T_cw[:3, :3] @ p + T_cw[:3, 3]
-
-
 def _place_ui_xyzrpy(T_work_cad: np.ndarray):
     """펜던트 place UI용: xyz + 베이스 RPY + 물체축 RPY.
 

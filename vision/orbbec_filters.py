@@ -161,17 +161,17 @@ class OrbbecFilterPanel:
         return True
 
     def _layout_height(self) -> int:
-        n = 1 + 2  # Noise header + MinDiff/MaxSize
+        n = 1 + 2  # Noise 제목 + MinDiff/MaxSize
         if self.caps["hole"]:
             n += 1
         if self.caps.get("holefill"):
             n += 2  # HoleFilling + Mode
-        n += 1  # Color header
+        n += 1  # Color 제목
         if self.caps["color_exposure"]:
             n += 1
         if self.caps["color_gain"]:
             n += 1
-        n += 1  # DepthExp header
+        n += 1  # DepthExp 제목
         if self.caps["exposure"]:
             n += 1
         if self.caps["gain"]:

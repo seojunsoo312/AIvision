@@ -1,4 +1,4 @@
-"""Lens / hand-eye JSON I/O. Files live in vision/calib_data/."""
+"""렌즈 / 손눈 캘리브 JSON 읽기·쓰기. 파일은 vision/calib_data/ 에 있다."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def intrinsics_for_rotate180(
     return k_rot, d_rot
 
 
-# Legacy project_rz180 → current +X-forward (same as motion.base_frame.R_USER_FROM_LEGACY).
+# 예전 project_rz180 → 지금 +X 앞 좌표 (motion.base_frame.R_USER_FROM_LEGACY 와 같음).
 _R_USER_FROM_RZ180 = np.array(
     [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
     dtype=np.float64,
@@ -66,7 +66,7 @@ _R_USER_FROM_RZ180 = np.array(
 
 
 def load_T_base_cam(path: Path | None = None) -> tuple[np.ndarray, Path]:
-    """T_base_cam in the current project base (+X forward)."""
+    """지금 프로젝트 베이스 (+X 앞) 기준 T_base_cam."""
     source = path or HANDEYE_JSON
     if not source.is_file():
         raise FileNotFoundError(

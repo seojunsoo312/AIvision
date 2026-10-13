@@ -1,4 +1,4 @@
-"""Local JSON pose feed for hand-eye capture. Motion owns the bus; clients only GET."""
+"""손눈 캘리브 촬영용 로컬 JSON 자세 피드. 버스는 모션이 갖고, 클라이언트는 GET 만 한다."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ POSE_URL = f"http://{POSE_HOST}:{POSE_PORT}{POSE_PATH}"
 
 
 def fetch_pose(*, timeout_s: float = 1.0) -> dict | None:
-    """None if the pendant process is not serving."""
+    """펜던트 프로세스가 서비스 중이 아니면 None."""
     try:
         with urlopen(POSE_URL, timeout=timeout_s) as resp:
             return json.loads(resp.read().decode("utf-8"))

@@ -1,4 +1,4 @@
-"""Robot-agnostic 4x4 rigid transforms and camera unprojection (mm)."""
+"""로봇과 무관한 4x4 강체 변환 (mm)."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def apply_T(xyz: np.ndarray, T: np.ndarray) -> np.ndarray:
 
 
 def transform_plane(plane: np.ndarray, T: np.ndarray) -> np.ndarray:
-    """ax+by+cz+d=0 in src → dst. p_dst = T @ p_src (mm)."""
+    """src 좌표의 평면 ax+by+cz+d=0 → dst 좌표. p_dst = T @ p_src (mm)."""
     n = np.asarray(plane[:3], dtype=np.float64).reshape(3)
     d = float(plane[3])
     T = np.asarray(T, dtype=np.float64).reshape(4, 4)
@@ -42,7 +42,7 @@ def transform_plane(plane: np.ndarray, T: np.ndarray) -> np.ndarray:
 
 
 def plane_tilt_from_z_deg(plane: np.ndarray) -> float:
-    """Angle between plane and XY (z=constant). 0 = horizontal."""
+    """평면과 XY (z=상수) 사이 각도. 0 = 수평."""
     n = np.asarray(plane[:3], dtype=np.float64).reshape(3)
     length = float(np.linalg.norm(n))
     if length < 1e-12:
@@ -51,7 +51,7 @@ def plane_tilt_from_z_deg(plane: np.ndarray) -> float:
 
 
 def rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """R @ a_hat = b_hat."""
+    """R @ a_hat = b_hat 인 회전 R."""
     a = np.asarray(a, dtype=np.float64).reshape(3)
     b = np.asarray(b, dtype=np.float64).reshape(3)
     a = a / max(float(np.linalg.norm(a)), 1e-12)
@@ -91,10 +91,10 @@ def axis_angle_R(axis: np.ndarray, angle_rad: float) -> np.ndarray:
 
 
 def align_T_base_cam_to_desk_z(T_base_cam: np.ndarray, plane_cam: np.ndarray) -> np.ndarray:
-    """Rotate T about the camera origin so the desk normal lines up with ±Z.
+    """책상 법선이 ±Z 와 나란하도록 카메라 원점을 중심으로 T 를 돌린다.
 
-    Translation (camera origin in base) is unchanged. Use when the robot sits
-    level on the desk: yellow RANSAC plane should be ∥ robot XY.
+    이동 성분 (베이스에서 본 카메라 원점) 은 그대로다. 로봇이 책상에 수평으로
+    놓였을 때 쓴다: 노란 RANSAC 평면이 로봇 XY 와 나란해야 한다.
     """
     T = np.asarray(T_base_cam, dtype=np.float64).reshape(4, 4).copy()
     plane_b = transform_plane(plane_cam, T)
@@ -111,13 +111,7 @@ def align_T_base_cam_to_desk_z(T_base_cam: np.ndarray, plane_cam: np.ndarray) ->
 def align_T_base_cam_to_base_desk_plane(
     T_base_cam: np.ndarray, plane_base: np.ndarray
 ) -> np.ndarray:
-    """Same as align_T_base_cam_to_desk_z, but plane is already in base."""
+    """align_T_base_cam_to_desk_z 와 같지만 평면이 이미 베이스 좌표다."""
     T = np.asarray(T_base_cam, dtype=np.float64).reshape(4, 4)
     plane_cam = transform_plane(plane_base, invert_T(T))
     return align_T_base_cam_to_desk_z(T, plane_cam)
-
-
-def unproject(u, v, z_mm, K) -> np.ndarray:
-    fx, fy = float(K[0, 0]), float(K[1, 1])
-    cx, cy = float(K[0, 2]), float(K[1, 2])
-    return np.array([(u - cx) * z_mm / fx, (v - cy) * z_mm / fy, z_mm], dtype=float)

@@ -72,7 +72,7 @@ from motion.grasp import (  # noqa: E402
 from motion.pick_place import PickPlaceRunner, build_pick_place_steps  # noqa: E402
 
 APPROACH_MARKER_RADIUS_M = 0.004  # 4 mm
-# TCP vs orange pre sphere: turn green when close (debug go-to).
+# TCP 와 주황 대기 구 비교: 가까우면 초록으로 (go-to 디버그용).
 PRE_TCP_MATCH_POS_MM = 1.5
 APPROACH_PRE_COLOR = 0xFB923C
 APPROACH_PRE_MATCH_COLOR = 0x22C55E
@@ -80,8 +80,8 @@ APPROACH_OTHER_COLOR = 0xC2410C
 DISPLAY_MS = 33
 RPY_SLIDER_MIN = -180.0
 RPY_SLIDER_MAX = 180.0
-# Place XYZ sliders (project base mm). XY reaches past the random-place ring
-# (r < RANDOM_R_MAX_MM, motion/grasp.py) so edge cases near full reach can be tried.
+# 놓기 XYZ 슬라이더 (프로젝트 베이스 mm). XY 는 랜덤 배치 고리
+# (r < RANDOM_R_MAX_MM, motion/grasp.py) 보다 넓게 해서 최대 도달 근처도 시험할 수 있다.
 PLACE_XY_SLIDER_MIN = -300.0
 PLACE_XY_SLIDER_MAX = 300.0
 PLACE_Z_SLIDER_MIN = 0.0
@@ -90,7 +90,7 @@ RPY_LIVE_APPLY_MS = 40
 
 
 def _T_meshcat(T_user: np.ndarray) -> np.ndarray:
-    """Project-base pose → Pinocchio/Meshcat (raw URDF) world."""
+    """프로젝트 베이스 자세 → Pinocchio/Meshcat (URDF 그대로) 월드."""
     from motion.base_frame import T_urdf_from_user
 
     return T_urdf_from_user(T_user)
@@ -140,7 +140,6 @@ class TeachGraspGui:
         self._panel_labels: list = []
         self._panel_buttons: list = []
         self._mode_cbs: list = []
-        self._place_xyz_frame = "base"
         if not self._embedded:
             apply_root_fonts(root)
         self._viz = visualizer
@@ -174,7 +173,6 @@ class TeachGraspGui:
         self._cad_mins_mm = verts.min(axis=0) * 1000.0
         self._cad_maxs_mm = verts.max(axis=0) * 1000.0
         self._rng = np.random.default_rng()
-        self._collision_warn = False
         self._warn_label: ctk.CTkLabel | None = None
         self._rand_mode: str | None = None
         self._rand_mode_vars: dict[str, object] = {}
@@ -204,13 +202,11 @@ class TeachGraspGui:
             host = root
             actions_host = actions_parent if actions_parent is not None else root
         self._host = host
-        self._actions_host = actions_host
 
         # TCP 칸과 같은 시작 높이·같은 줄 간격. 박스는 TCP 행과 같은 CTkFrame.
         title = ctk.CTkLabel(host, text="사물의 위치", anchor="w")
         title.pack(anchor="w", padx=8, pady=(8, 4))
         self._panel_labels.append(title)
-        self._place_xyz_seg = self._xyz_jog_frame_bar(host)
         for key, label, val in (
             ("place_x", "x (mm)", place.xyz_mm[0]),
             ("place_y", "y (mm)", place.xyz_mm[1]),
@@ -391,33 +387,9 @@ class TeachGraspGui:
             root.bind("<Return>", lambda _e: self.apply())
         self._draw_static(vertices_m, faces)
         self.apply()
-        # Color pre sphere while TCP moves; pendant owns display(q) when not drive_viz.
+        # TCP 가 움직이는 동안 대기 구 색을 바꾼다. drive_viz 가 아니면 display(q) 는 펜던트가 한다.
         if self._ctrl is not None:
             self._schedule_display()
-
-    def _xyz_jog_frame_bar(self, parent):
-        """TCP 패널의 XYZ jog frame 과 같은 자리. 숫자는 그대로 둔다."""
-        import customtkinter as ctk
-
-        bar = ctk.CTkFrame(parent, fg_color="transparent")
-        bar.pack(fill="x", padx=6, pady=(0, 2))
-        lab = ctk.CTkLabel(bar, text="XYZ jog frame", width=200, anchor="w")
-        lab.pack(side="left", padx=(4, 2))
-        self._panel_labels.append(lab)
-        seg = ctk.CTkSegmentedButton(
-            bar,
-            values=["base", "TCP"],
-            command=self._on_place_xyz_frame,
-            width=148,
-        )
-        seg.set("base")
-        seg.pack(side="left", padx=(8, 4))
-        return seg
-
-    def _on_place_xyz_frame(self, value: str) -> None:
-        if self._embedded and not self._panel_enabled:
-            return
-        self._place_xyz_frame = "tcp" if str(value) == "TCP" else "base"
 
     def _axis_row(self, parent):
         """TCP `_cart_row` 와 같은 프레임. 높이는 조그 버튼(32)에 맞춘다."""
@@ -474,29 +446,6 @@ class TeachGraspGui:
             color=0x4ADE80,
             closed=True,
         )
-
-    def _xyzrpy_block(
-        self,
-        parent,
-        prefix: str,
-        xyz: tuple[float, float, float],
-        rpy: tuple[float, float, float],
-    ) -> None:
-        for key, label, val in (
-            (f"{prefix}_x", "x mm", xyz[0]),
-            (f"{prefix}_y", "y mm", xyz[1]),
-            (f"{prefix}_z", "z mm", xyz[2]),
-        ):
-            if prefix == "place":
-                self._xyz_row(parent, key, float(val), label)
-            else:
-                self._row(parent, key, f"{val:.1f}", label)
-        for key, label, val in (
-            (f"{prefix}_roll", "Rx deg", rpy[0]),
-            (f"{prefix}_pitch", "Ry deg", rpy[1]),
-            (f"{prefix}_yaw", "Rz deg", rpy[2]),
-        ):
-            self._rpy_row(parent, key, float(val), label)
 
     def _row(self, parent, key: str, value: str, label: str) -> None:
         import customtkinter as ctk
@@ -767,10 +716,6 @@ class TeachGraspGui:
         )
         return place, self._grasp_spec
 
-    def _fill(self, place: PlacePose, grasp: GraspSpec) -> None:
-        self._fill_place(place)
-        self._fill_grasp(grasp)
-
     def _set_entry(self, key: str, val: float) -> None:
         self.entries[key].delete(0, "end")
         self.entries[key].insert(0, f"{val:.1f}")
@@ -798,9 +743,6 @@ class TeachGraspGui:
         }
         for key, val in mapping.items():
             self._set_entry(key, val)
-
-    def _fill_grasp(self, grasp: GraspSpec) -> None:
-        self._grasp_spec = grasp
 
     def _draw_static(self, vertices_m: np.ndarray, faces: np.ndarray) -> None:
         if not self._region_hidden():
@@ -830,7 +772,6 @@ class TeachGraspGui:
         for slider in self.sliders.values():
             slider.configure(state="disabled")
         self._place_rpy_seg.configure(state="disabled")
-        self._place_xyz_seg.configure(state="disabled")
         for cb in (self._grasp_hide_cb, self._region_hide_cb, *self._mode_cbs):
             cb.configure(state="disabled", text_color_disabled=gray)
         for btn in self._panel_buttons:
@@ -851,7 +792,7 @@ class TeachGraspGui:
         self.root.after(DISPLAY_MS, self._schedule_display)
 
     def _tcp_matches_pre(self, st) -> bool:
-        """True if TCP is on the orange pre sphere (project-base position)."""
+        """TCP 가 주황 대기 구 위에 있으면 True (프로젝트 베이스 위치)."""
         auto = self._auto_pre
         if auto is None:
             return False
@@ -994,7 +935,7 @@ class TeachGraspGui:
         self._viz.set_overlay_axes("cad_axes", T_cad, scale=0.02, labels=False)
         self._viz.clear_overlay("base_at_obj")
         self._viz.set_overlay_axes("pregrasp", T_p, scale=0.02)
-        # Virtual N axis (x=z, y=0) only while that approach is selected.
+        # 가상 N 축 (x=z, y=0) 은 그 접근을 골랐을 때만 그린다.
         if auto.axis_name == "N":
             n_world = T_cad[:3, :3] @ N_CAD
             o = T_cad[:3, 3]
@@ -1027,12 +968,11 @@ class TeachGraspGui:
             self._show_robot(grasp.gripper)
 
     def _set_collision_warn(self, text: str) -> None:
-        self._collision_warn = bool(text)
         if self._warn_label is not None:
             self._warn_label.configure(text=text)
 
     def _on_rand_mode_toggle(self, key: str) -> None:
-        """One mode at a time; others stay clickable (no lock). Click again to clear."""
+        """한 번에 한 모드. 나머지도 누를 수 있다 (잠그지 않음). 다시 누르면 해제."""
         var = self._rand_mode_vars[key]
         selected = bool(var.get())
         if selected:
@@ -1049,7 +989,7 @@ class TeachGraspGui:
         return m if m in RANDOM_PLACE_MODES else "free"
 
     def randomize_place(self) -> None:
-        """Random place by selected mode (default/unset = free). Floor-safe."""
+        """선택한 모드로 랜덤 배치 (기본/미선택 = free). 바닥 아래로 안 들어감."""
         self._set_collision_warn("")
         mode = self._active_rand_mode()
         place = sample_random_place(self._cad_verts_m, mode=mode, rng=self._rng)
@@ -1109,12 +1049,6 @@ class TeachGraspGui:
         self.apply()
         self._set_status(f"물체 초기화: {self._yaml_path.name} place")
 
-    def reset_grasp(self) -> None:
-        _, grasp = load_specs(self._yaml_path)
-        self._fill_grasp(grasp)
-        self.apply()
-        self._set_status(f"grasp 초기화: {self._yaml_path.name} grasp")
-
     def _goto_T(self, T: np.ndarray, *, label: str) -> float:
         if self._ctrl is None:
             self._set_status("컨트롤러 없음. python pendant/main.py --grasp", error=True)
@@ -1155,9 +1089,6 @@ class TeachGraspGui:
             auto.T_grasp_base,
             label=f"집기 위치 ({auto.axis_name}{form_txt} a={auto.a_mm:.0f} {flip_txt})",
         )
-
-    def replay_pg(self) -> None:
-        self.start_pick_place()
 
     def start_pick_place(self) -> None:
         if self._ctrl is None or self._pp_runner is None:
@@ -1330,46 +1261,6 @@ def attach_teach_panel(
         enabled=enabled,
         actions_parent=actions_parent,
     )
-
-
-def attach_teach_window(
-    parent,
-    visualizer,
-    *,
-    meshcat_url: str,
-    controller=None,
-    geometry: str = "560x1200+1000+40",
-) -> TeachGraspGui | None:
-    """펜던트와 같은 Meshcat에 teach 창을 붙인다. 팔 display(q) 는 펜던트가 담당."""
-    import customtkinter as ctk
-
-    try:
-        mesh_path = cad_mesh_path()
-        vertices_m, faces = load_mesh_m(mesh_path)
-    except Exception as exc:
-        print(f"teach 창 생략: CAD 로드 실패 ({exc})")
-        return None
-    place, grasp = load_specs(CAD_YAML)
-    win = ctk.CTkToplevel(parent)
-    win.geometry(geometry)
-    win.minsize(520, 1100)
-    gui = TeachGraspGui(
-        win,
-        visualizer=visualizer,
-        mesh_path=mesh_path,
-        vertices_m=vertices_m,
-        faces=faces,
-        place=place,
-        grasp=grasp,
-        meshcat_url=meshcat_url,
-        kinematics=getattr(controller, "_kin", None) if controller is not None else None,
-        controller=controller,
-        own_robot=False,
-        drive_viz=False,
-    )
-    win.geometry(geometry)
-    win.after(80, win.lift)
-    return gui
 
 
 def parse_args() -> argparse.Namespace:

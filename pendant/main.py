@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Joint + Cartesian jog, mesh collision, absolute go-to. Connect for real hardware."""
+"""관절 + 직교 조그, 메시 충돌, 절대 go-to. 실기는 Connect 로 연결한다."""
 
 from __future__ import annotations
 

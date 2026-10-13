@@ -1,4 +1,4 @@
-"""Virtual / real jog / go-to. Soft joint limits via clamp_q; mesh collision blocks the step."""
+"""가상 / 실기 조그와 go-to. 관절 소프트 한계는 clamp_q, 메시 충돌이면 그 스텝을 막는다."""
 
 from __future__ import annotations
 
@@ -34,45 +34,43 @@ from motion.robot_kinematics import (
 )
 
 FPS = 30
-JOINT_VEL_DEG_S = 45.0  # displayed 100%
-JOINT_VEL_MIN_DEG_S = 8.0  # displayed 10% (former 40% of 20°/s)
+JOINT_VEL_DEG_S = 45.0  # 화면 표시 100%
+JOINT_VEL_MIN_DEG_S = 8.0  # 화면 표시 10% (예전 20°/s 의 40%)
 GRIPPER_VEL_UNIT_S = 40.0
-JOG_VEL_MPS = 0.025  # default XYZ jog; GUI slider 5–45 mm/s
+JOG_VEL_MPS = 0.025  # XYZ 조그 기본 속도. GUI 슬라이더는 5–45 mm/s
 JOG_VEL_MIN_MPS = 0.005
 JOG_VEL_MAX_MPS = 0.045
 JOG_ROT_MIN_DEG_S = 5.0
 JOG_ROT_MAX_DEG_S = 45.0
 JOG_ROT_DEG_S = (JOG_ROT_MIN_DEG_S + JOG_ROT_MAX_DEG_S) / 2.0
 JOG_ROT_RAD_S = JOG_ROT_DEG_S * DEG2RAD
-TORQUE_PCT_MIN = 10.0
-TORQUE_PCT_MAX = 100.0
 DEFAULT_ARM_TORQUE_PCT = 100.0
 DEFAULT_GRIPPER_TORQUE_PCT = 50.0
 SPEED_PCT_MIN = 10.0
 SPEED_PCT_MAX = 100.0
 DEFAULT_SPEED_PCT = 50.0
-# Displayed 10% == former 40% override; displayed 100% == former 150%.
+# 화면 10% == 예전 40% 오버라이드, 화면 100% == 예전 150%.
 SPEED_SCALE_AT_MIN = 0.40
 SPEED_SCALE_AT_MAX = 1.50
 SPEED_PRESETS = (("느림", 10.0), ("보통", 50.0), ("빠름", 100.0))
-MAX_TARGET_LEAD_M = 0.012  # 12 mm vs measured TCP (real). Sub-tick goals never move STS3215.
-# q_send = (1-β) q_prev + β q_ik. Smaller β = less shake, more lag.
+MAX_TARGET_LEAD_M = 0.012  # 명령 TCP 와 실측 TCP 차이 12 mm 까지 (실기). 1틱보다 작은 목표는 STS3215 가 움직이지 않는다.
+# q_send = (1-β) q_prev + β q_ik. β 가 작을수록 덜 떨리지만 더 늦게 따라간다.
 CART_IK_BLEND = 0.28
 GOTO_DURATION_S = 2.5
 GOTO_MIN_S = 0.2
 GOTO_MAX_S = 30.0
-GOTO_SETTLE_POS_M = 0.0008  # 0.8 mm — EE go-to keeps IK until TCP is on the goal
+GOTO_SETTLE_POS_M = 0.0008  # 0.8 mm — EE go-to 는 TCP 가 목표에 닿을 때까지 IK 를 계속한다
 GOTO_SETTLE_MAX_S = 2.5
 GOTO_SETTLE_IK_LOOPS = 4
-# EE go-to: if the straight TCP line would hit the column (L1 = J1–J2), lift first.
-# Height is the lowest via that clears; only then step up toward MAX.
+# EE go-to: TCP 를 직선으로 옮기면 기둥(L1 = J1–J2)에 부딪힐 때 먼저 위로 올린다.
+# 높이는 길이 열리는 가장 낮은 경유 높이. 막히면 MAX 쪽으로 한 단계씩 올린다.
 GOTO_LIFT_CLEAR_M = 0.025
 GOTO_LIFT_STEP_M = 0.010
 GOTO_LIFT_MAX_Z_M = 0.16
 GOTO_LIFT_SKIP_M = 0.005
 GOTO_PATH_CHECK_N = 10
-# Joint-space EE go-to: each servo_toward is capped at 5°/frame.
-# Far pick → drop (S1 ~120°+) needs more than a fixed 24 frames.
+# 관절 공간 EE go-to: servo_toward 한 번에 최대 5°/프레임.
+# 먼 집기 → 놓기 (S1 ~120° 이상)는 고정 24 프레임으로 모자라다.
 GOTO_JOINTS_IK_FRAMES = 200
 GOTO_JOINTS_IK_POS_M = 0.015
 
@@ -192,53 +190,18 @@ class Controller:
         with self._lock:
             self._jog_vel_mps = vel
 
-    def tcp_jog_mm_s(self) -> float:
-        with self._lock:
-            return self._jog_vel_mps * 1000.0
-
     def set_rpy_jog_deg_s(self, deg_s: float) -> None:
         vel = float(np.clip(deg_s, JOG_ROT_MIN_DEG_S, JOG_ROT_MAX_DEG_S))
         with self._lock:
             self._jog_rot_rad_s = vel * DEG2RAD
-
-    def rpy_jog_deg_s(self) -> float:
-        with self._lock:
-            return self._jog_rot_rad_s / DEG2RAD
 
     def set_speed_pct(self, pct: float) -> None:
         value = float(np.clip(pct, SPEED_PCT_MIN, SPEED_PCT_MAX))
         with self._lock:
             self._speed_pct = value
 
-    def speed_pct(self) -> float:
-        with self._lock:
-            return float(self._speed_pct)
-
-    def speed_scale(self) -> float:
-        with self._lock:
-            return self._speed_scale_unlocked()
-
     def _speed_scale_unlocked(self) -> float:
         return speed_pct_to_scale(self._speed_pct)
-
-    def set_joint_torque_pct(self, joint: str, pct: float) -> None:
-        if joint not in self._torque_pct:
-            raise KeyError(joint)
-        value = float(np.clip(pct, TORQUE_PCT_MIN, TORQUE_PCT_MAX))
-        with self._lock:
-            self._torque_pct[joint] = value
-        hw = self._hw
-        if hw is None or not hw.is_connected or not hw.torque_enabled:
-            return
-        try:
-            hw.set_torque_pct(joint, value)
-        except Exception as exc:
-            with self._lock:
-                self._fault = f"torque write failed ({exc})"
-
-    def joint_torque_pct(self, joint: str) -> float:
-        with self._lock:
-            return float(self._torque_pct[joint])
 
     def _apply_torque_pcts_to_hw(self) -> None:
         hw = self._hw
@@ -261,14 +224,14 @@ class Controller:
         raise ValueError(f"jog frame must be base|tcp, got {frame!r}")
 
     def set_rot_frame(self, frame: str) -> None:
-        """RPY jog frame: 'base' (world-fixed) or 'tcp' (tool-local)."""
+        """RPY 조그 기준: 'base' (월드 고정) 또는 'tcp' (공구 기준)."""
         key = self._normalize_jog_frame(frame)
         with self._lock:
             self._rot_frame = key
             self._reset_cart_targets()
 
     def set_xyz_frame(self, frame: str) -> None:
-        """XYZ jog frame: 'base' (project +X forward) or 'tcp' (tool-local). Go-to stays base."""
+        """XYZ 조그 기준: 'base' (프로젝트 +X 앞) 또는 'tcp' (공구 기준). Go-to 는 항상 베이스."""
         key = self._normalize_jog_frame(frame)
         with self._lock:
             self._xyz_frame = key
@@ -296,7 +259,7 @@ class Controller:
                 self._reset_cart_targets()
 
     def clear_jog(self) -> None:
-        """Stop hold-to-jog only. Absolute go-to keeps running."""
+        """누르고 있는 조그만 멈춘다. 절대 go-to 는 계속 간다."""
         with self._lock:
             for name in self._joint_jog:
                 self._joint_jog[name] = 0
@@ -752,14 +715,14 @@ class Controller:
         )
 
     def handeye_payload(self) -> dict:
-        """Measured TCP in project base (+X forward). Fallback = commanded pose."""
+        """프로젝트 베이스(+X 앞)에서 잰 실측 TCP. 없으면 명령 자세를 쓴다."""
         with self._lock:
             q = self._q_meas.copy() if self._q_meas is not None else self._q.copy()
             pose_u = self._pose_meas if self._pose_meas is not None else self._pose
             pose = tcp_pose_user_from_urdf(pose_u)
             mode = self._mode
             fault = self._fault
-            # Same frame as pendant err label: cmd − meas, project base mm.
+            # 펜던트 오차 표시와 같은 기준: 명령 − 실측, 프로젝트 베이스 mm.
             ee_err = self._ee_err_mm
             err_xyz = None if self._err_xyz_mm is None else xyz_user_from_urdf(self._err_xyz_mm)
         hw = self._hw
@@ -785,7 +748,7 @@ class Controller:
         }
 
     def _frozen_unlocked(self) -> bool:
-        """True while connecting, or after E-stop (bus up, torque off)."""
+        """연결 중이거나 비상 정지 뒤(버스는 켜짐, 토크는 꺼짐)면 True."""
         if self._hw_hold:
             return True
         hw = self._hw
@@ -812,9 +775,9 @@ class Controller:
             return False
         q = self._kin.clamp_q(q)
         pose = self._kin.forward_tcp(q)
-        # Already-folded poses overlap L1/L2 vs L4. Jog may escape with a real +Z
-        # step even if that newly collides. Go-to never uses that exception —
-        # otherwise EE paths can tunnel gripper/wrist through the column.
+        # 이미 접힌 자세는 L1/L2 와 L4 가 겹친다. 조그는 진짜 +Z 방향이면 새로 충돌해도
+        # 빠져나가게 둔다. Go-to 에는 이 예외를 쓰지 않는다 —
+        # 쓰면 EE 경로가 그리퍼·손목을 기둥 속으로 통과시킬 수 있다.
         entering = self._kin.in_collision(q) and not self._kin.in_collision(q_now)
         lifting = float(pose.xyz_m[2]) >= z_now + 1e-4
         if entering and not (allow_lift_escape and lifting):
@@ -1017,8 +980,8 @@ class Controller:
             if self._target_xyz is None or self._target_rot is None:
                 self._target_xyz = pose.xyz_m.copy()
                 self._target_rot = pose.rotation.copy()
-            # XYZ jog: base = project axes (+X forward). TCP = gripper axes.
-            # Integrated target stays in URDF. Go-to numbers stay base.
+            # XYZ 조그: base = 프로젝트 축 (+X 앞). TCP = 그리퍼 축.
+            # 누적 목표는 URDF 좌표로 둔다. Go-to 숫자는 베이스 좌표 그대로.
             v_user = np.array([cart_jog["x"], cart_jog["y"], cart_jog["z"]], dtype=float)
             xyz_frame = self._xyz_frame
             if xyz_frame == ROT_FRAME_TCP:
@@ -1026,8 +989,8 @@ class Controller:
             else:
                 delta_urdf = R_URDF_FROM_USER @ v_user
             self._target_xyz = self._target_xyz + jog_vel * dt * delta_urdf
-            # Cap vs the arm, not vs q_cmd. IK must keep accumulating on q_cmd
-            # or each frame's joint goal stays < 1 Feetech tick and nothing moves.
+            # 앞서 나가는 한도는 q_cmd 가 아니라 실제 팔 기준. IK 는 q_cmd 에 계속 누적해야 한다.
+            # 아니면 프레임마다 관절 목표가 Feetech 1틱보다 작아서 아무것도 안 움직인다.
             ref = meas_xyz if meas_xyz is not None else pose.xyz_m
             lead = self._target_xyz - ref
             cmd_user = np.array(
@@ -1042,7 +1005,7 @@ class Controller:
                     if along > MAX_TARGET_LEAD_M:
                         self._target_xyz -= axis * (along - MAX_TARGET_LEAD_M)
             else:
-                # Which URDF axes are being driven (for lead cap).
+                # 지금 움직이는 URDF 축 (앞서 나가기 한도용).
                 cmd = np.abs(R_URDF_FROM_USER) @ cmd_user.astype(float) > 0.5
                 if translating and np.any(cmd):
                     lead_cmd = np.where(cmd, lead, 0.0)
@@ -1054,18 +1017,18 @@ class Controller:
                     [cart_jog["wx"], cart_jog["wy"], cart_jog["wz"]], dtype=float
                 )
                 if self._rot_frame == ROT_FRAME_TCP:
-                    # Body / TCP-local: Roll→TCP X, Pitch→TCP Y, Yaw→TCP Z.
+                    # 몸체 / TCP 기준: Roll→TCP X, Pitch→TCP Y, Yaw→TCP Z.
                     self._target_rot = self._target_rot @ pin.exp3(w_user)
                 else:
-                    # Project base axes (+X forward of URDF Rz(-90°)).
+                    # 프로젝트 베이스 축 (URDF Rz(-90°) 의 +X 앞).
                     w = R_URDF_FROM_USER @ w_user
                     self._target_rot = pin.exp3(w) @ self._target_rot
             xyz = self._target_xyz.copy()
             rot = self._target_rot.copy()
             tcp_xyz = xyz_frame == ROT_FRAME_TCP
 
-        # TCP jog moves along the gripper, so the position error is not confined
-        # to one project-base axis. Track the integrated point in all three axes.
+        # TCP 조그는 그리퍼 방향으로 움직이므로 위치 오차가 베이스 한 축에만
+        # 생기지 않는다. 누적 점을 세 축 모두 따라간다.
         cmd_mask = (
             None
             if (not translating or tcp_xyz)
@@ -1078,7 +1041,7 @@ class Controller:
             cmd_mask=cmd_mask,
             ori_weight=1.0 if rotating else 0.0,
         )
-        # Spec: smooth the command. Raw IK nullspace (S1↔S4 on X) ticks the bus.
+        # 사양: 명령을 부드럽게. IK 영공간 그대로면 (X 조그 때 S1↔S4) 버스가 틱 단위로 떨린다.
         q_next = (1.0 - CART_IK_BLEND) * q + CART_IK_BLEND * q_ik
         if not self._commit(q_next, rewind_cart=True):
             return

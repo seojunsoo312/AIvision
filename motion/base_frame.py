@@ -1,16 +1,16 @@
-"""Project base frame vs Pinocchio/URDF world.
+"""프로젝트 베이스 좌표와 Pinocchio/URDF 월드 좌표의 관계.
 
-User-facing base (pendant, teach place, hand-eye, register --base):
-  +X = robot forward, +Z = up, +Y = left (right-hand).
+사용자가 보는 베이스 좌표 (펜던트, 놓기 자세 가르치기, 손눈 캘리브, register --base):
+  +X = 로봇 앞, +Z = 위, +Y = 왼쪽 (오른손 좌표계).
 
-That is the previous Rz(180°) user frame rotated by Rz(+90°) about the
-shared origin. Equivalently, p_urdf = Rz(-90°) @ p_user.
+예전 Rz(180°) 사용자 좌표를 같은 원점에서 Rz(+90°) 돌린 것이다.
+같은 말로 p_urdf = Rz(-90°) @ p_user.
 
   p_urdf = R @ p_user
   R_urdf = R @ R_user
   T_urdf = T_urdf_from_user @ T_user
 
-Internal FK/IK/collision stay in URDF.
+FK·IK·충돌 계산은 안에서 계속 URDF 좌표로 한다.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ R_URDF_FROM_USER = np.array(
 )
 R_USER_FROM_URDF = R_URDF_FROM_USER.T
 
-# Previous user (+X right, +Y forward) → current user (+X forward, +Y left).
+# 예전 사용자 좌표(+X 오른쪽, +Y 앞) → 지금 사용자 좌표(+X 앞, +Y 왼쪽).
 R_USER_FROM_LEGACY = np.array(
     [
         [0.0, 1.0, 0.0],
@@ -45,12 +45,6 @@ R_USER_FROM_LEGACY = np.array(
 def T_urdf_from_user_matrix() -> np.ndarray:
     T = np.eye(4)
     T[:3, :3] = R_URDF_FROM_USER
-    return T
-
-
-def T_user_from_urdf_matrix() -> np.ndarray:
-    T = np.eye(4)
-    T[:3, :3] = R_USER_FROM_URDF
     return T
 
 
@@ -74,12 +68,8 @@ def T_urdf_from_user(T_user: np.ndarray) -> np.ndarray:
     return T_urdf_from_user_matrix() @ np.asarray(T_user, dtype=float).reshape(4, 4)
 
 
-def T_user_from_urdf(T_urdf: np.ndarray) -> np.ndarray:
-    return T_user_from_urdf_matrix() @ np.asarray(T_urdf, dtype=float).reshape(4, 4)
-
-
 def T_user_from_stored(T: np.ndarray, base_frame: str | None) -> np.ndarray:
-    """Lift a stored 4×4 in `base_frame` into the current user base."""
+    """`base_frame` 기준으로 저장된 4×4 를 지금 사용자 베이스 좌표로 옮긴다."""
     T = np.asarray(T, dtype=float).reshape(4, 4)
     frame = (base_frame or LEGACY_BASE_FRAME).strip()
     if frame == USER_BASE_FRAME:
@@ -98,7 +88,7 @@ def tcp_pose_user_from_urdf(pose: TcpPose) -> TcpPose:
 
 
 def ee_target_urdf_from_user(xyz_mm: np.ndarray, rpy_deg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """User Go-to (mm, deg) → URDF meters + rotation matrix."""
+    """사용자 Go-to 값 (mm, deg) → URDF 미터 위치 + 회전 행렬."""
     xyz_u = np.asarray(xyz_mm, dtype=float).reshape(3) / 1000.0
     rpy = np.asarray(rpy_deg, dtype=float).reshape(3)
     R_u = rpy_deg_to_rotmat(float(rpy[0]), float(rpy[1]), float(rpy[2]))

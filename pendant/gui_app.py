@@ -1,10 +1,11 @@
-"""Joint + Cartesian jog and absolute go-to."""
+"""관절 + 직교 조그와 절대 go-to."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
+# pendant/ 와 프로젝트 폴더를 import 경로에 넣는다 (python pendant/main.py 로 실행해도 되게).
 _PENDANT = Path(__file__).resolve().parent
 _PROJECT = _PENDANT.parent
 for path in (_PROJECT, _PENDANT):
@@ -13,6 +14,7 @@ for path in (_PROJECT, _PENDANT):
 
 from ui_style import apply_root_fonts, apply_ui_theme, enable_xft_tk, mono_font, ui_font
 
+# 한글 글꼴: tkinter 를 import 하기 전에 시스템 Xft Tk 를 먼저 읽어야 한다.
 enable_xft_tk()
 
 import time
@@ -44,6 +46,7 @@ from motion.hw_controller import grip_100_to_user, grip_user_to_100
 from motion.robot_kinematics import GRIPPER_JOINT, LEROBOT_FROM_URDF, SHUTDOWN_JOINTS_DEG, URDF_JOINT_NAMES
 from motion.visualizer import Visualizer
 
+# 화면 갱신 간격 (ms). 약 30 fps.
 DISPLAY_MS = 33
 
 
@@ -52,13 +55,15 @@ def _set_text(widget, text: str) -> None:
     if widget.cget("text") != text:
         widget.configure(text=text)
 
+
 def _joint_ui_name(name: str) -> str:
-    """Pendant label: S1–S6 → J1–J6. Gripper stays S7."""
+    """펜던트 표시 이름: S1–S6 → J1–J6. 그리퍼는 S7 그대로."""
     if name.startswith("S") and name[1:].isdigit() and 1 <= int(name[1:]) <= 6:
         return f"J{name[1:]}"
     return name
 
 
+# Rx/Ry/Rz 글자색. 지금은 모두 흰색 (기준 좌표에 따라 색을 바꿀 자리).
 _RPY_COLOR_WHITE = "#FFFFFF"
 _RPY_COLOR = {
     "Rx": _RPY_COLOR_WHITE,
@@ -71,6 +76,11 @@ _RPY_COLOR = {
 
 
 class PendantGui:
+    """펜던트 창. 왼쪽 관절, 가운데 TCP, 오른쪽 두 칸은 사물 위치 패널 (teach_grasp).
+
+    화면은 DISPLAY_MS 마다 컨트롤러 상태를 읽어 다시 그린다. 실제 제어는 Controller 가 한다.
+    """
+
     def __init__(
         self,
         root: ctk.CTk,
@@ -91,6 +101,7 @@ class PendantGui:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         apply_root_fonts(self.root)
 
+        # --- 맨 위: 안내 한 줄과 현재 TCP·오차·모드 표시 ---
         status = ctk.CTkLabel(
             root,
             text=f"+/− 조그 · 속도% 공통 · Meshcat: {meshcat_url or 'printed URL'}",
@@ -118,6 +129,7 @@ class PendantGui:
         self.rot_frame_label.pack(side="top", anchor="w", padx=12)
         self.fault_label.pack(side="top", anchor="w", padx=12, pady=(0, 2))
 
+        # --- 본문 4칸: 관절 | TCP | 사물 위치 | 사물 위치 동작 버튼 ---
         bar = ctk.CTkFrame(root, fg_color="transparent")
         body = ctk.CTkFrame(root, fg_color="transparent")
         body.grid_columnconfigure(0, weight=1)
@@ -137,6 +149,7 @@ class PendantGui:
         self._grasp_col.grid(row=0, column=2, sticky="new", padx=(0, 6))
         self._grasp_act_col.grid(row=0, column=3, sticky="new")
 
+        # --- 왼쪽 칸: 관절마다 [이름, 현재값, −, +, 목표 입력칸, 단위] ---
         ctk.CTkLabel(left, text="Joints", anchor="w").pack(
             anchor="w", padx=8, pady=(8, 4)
         )
@@ -194,6 +207,7 @@ class PendantGui:
             side="left"
         )
 
+        # 관절 속도: 프리셋 버튼 + 슬라이더 (%). 조그와 관절 go-to 에 같이 쓰인다.
         ctk.CTkLabel(left, text="관절 속도", anchor="w").pack(
             anchor="w", padx=8, pady=(12, 4)
         )
@@ -226,6 +240,7 @@ class PendantGui:
         self._speed_slider.pack(fill="x", padx=4, pady=(4, 8))
         self._ctrl.set_speed_pct(DEFAULT_SPEED_PCT)
 
+        # --- 가운데 칸: TCP 축마다 [이름, 현재값, −, +, 목표 입력칸, 단위] ---
         ctk.CTkLabel(right, text="TCP", anchor="w").pack(
             anchor="w", padx=8, pady=(8, 4)
         )
@@ -252,6 +267,7 @@ class PendantGui:
         )
         ctk.CTkButton(ee_btn, text="TCP 이동", width=110, command=self._move_ee).pack(side="left")
 
+        # 그리퍼: 누르고 있는 동안만 열리거나 닫힌다.
         grip = ctk.CTkFrame(right)
         grip.pack(fill="x", pady=(12, 3), padx=6)
         ctk.CTkLabel(grip, text="Gripper", width=70, anchor="w").pack(side="left", padx=(4, 8))
@@ -270,6 +286,7 @@ class PendantGui:
             width=8,
         )
 
+        # TCP 조그 속도: 프리셋 버튼 + 위치 (mm/s) · 자세 (deg/s) 슬라이더.
         vel = ctk.CTkFrame(right)
         vel.pack(fill="x", padx=6, pady=(4, 8))
         jog_preset = ctk.CTkFrame(vel, fg_color="transparent")
@@ -319,6 +336,7 @@ class PendantGui:
         self._rpy_vel_slider.pack(fill="x", padx=4, pady=(4, 6))
         self._ctrl.set_rpy_jog_deg_s(JOG_ROT_DEG_S)
 
+        # --- 맨 아래 버튼 줄: HOME, 초기자세, 정지, 비상 정지, 경로 표시, 실기 연결 ---
         bar.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
         body.pack(side="top", fill="both", expand=True, padx=12, pady=(2, 4))
         ctk.CTkButton(bar, text="HOME", width=80, command=self._ctrl.home).pack(side="left", padx=(0, 8))
@@ -345,6 +363,7 @@ class PendantGui:
             width=90,
         ).pack(side="left", padx=(8, 0))
 
+        # 조그 버튼 밖에서 마우스를 떼도 조그가 멈추게 한다.
         self.root.bind_all("<ButtonRelease-1>", self._on_global_release, add="+")
         self._mount_grasp_panel()
         self._fill_joints()
@@ -353,11 +372,8 @@ class PendantGui:
         self.root.after(80, self._align_joint_goto_row)
         self.root.bind("<Map>", lambda _e: self.root.after(50, self._align_joint_goto_row), add="+")
 
-    @property
-    def grasp_ready(self) -> bool:
-        return self._teach is not None and self._grasp_enabled
-
     def _mount_grasp_panel(self) -> None:
+        """오른쪽 두 칸에 사물 위치 패널 (teach_grasp) 을 붙인다. 실패하면 안내 글자만."""
         from teach_grasp import attach_teach_panel
 
         self._teach = attach_teach_panel(
@@ -405,6 +421,7 @@ class PendantGui:
         color: str | None = None,
         store_label: bool = False,
     ) -> None:
+        """TCP 한 축 줄: [이름, 현재값, −, +, 목표 입력칸, 단위]. axis 는 컨트롤러 조그 축 이름."""
         row = ctk.CTkFrame(parent)
         row.pack(fill="x", pady=3, padx=6)
         label_kw: dict = {"text": title, "width": 36, "anchor": "w"}
@@ -445,7 +462,8 @@ class PendantGui:
         ctk.CTkLabel(row, **unit_kw).pack(side="left")
 
     def _hold_button(self, parent: ctk.CTkFrame, text: str, on_press, on_release, *, width: int = 3) -> None:
-        # width <= 4 is the old Tk character width for +/−. Larger values are text buttons.
+        """누르고 있는 동안 동작하는 조그 버튼. 누르면 on_press, 떼면 on_release."""
+        # width <= 4 는 예전 Tk 글자 폭 기준 +/− 버튼. 더 크면 글자 버튼.
         px = 40 if width <= 4 else 88
         btn = ctk.CTkButton(
             parent,
@@ -455,32 +473,37 @@ class PendantGui:
             corner_radius=8,
             font=ui_font(16 if width <= 4 else 13),
         )
+        # _on_global_release 가 조그 버튼인지 알아보는 표시.
         btn._is_jog = True  # type: ignore[attr-defined]
         btn.pack(side="left", padx=2)
         btn.bind("<ButtonPress-1>", lambda _e: on_press())
         btn.bind("<ButtonRelease-1>", lambda _e: on_release())
 
     def _on_global_release(self, event: tk.Event) -> None:
+        """창 어디서든 마우스를 떼면 호출. 조그 버튼 위가 아니면 조그를 멈춘다."""
         w = event.widget
         while w is not None:
             if getattr(w, "_is_jog", None):
                 return
             w = getattr(w, "master", None)
-        # Mouse-up outside a jog button stops jog, but must not cancel go-to.
+        # 조그 버튼 밖에서 마우스를 떼면 조그는 멈추지만 go-to 는 취소하면 안 된다.
         self._ctrl.clear_jog()
 
     def _joint_display(self, name: str, user_deg: float) -> float:
+        """화면에 보일 값. 그리퍼는 0–100, 나머지는 도 그대로."""
         if name == GRIPPER_JOINT:
             return grip_user_to_100(user_deg)
         return float(user_deg)
 
     def _fill_joints(self) -> None:
+        """「현재값 넣기」: 관절 입력칸에 지금 관절값을 채운다."""
         st = self._ctrl.snapshot()
         for name, deg in st.joints_deg.items():
             self.joint_entries[name].delete(0, "end")
             self.joint_entries[name].insert(0, f"{self._joint_display(name, deg):.2f}")
 
     def _fill_ee(self) -> None:
+        """「현재값 넣기」: TCP 입력칸에 지금 위치·자세를 채운다."""
         st = self._ctrl.snapshot()
         xyz = st.pose.xyz_mm
         rpy = st.pose.rpy_deg
@@ -497,6 +520,7 @@ class PendantGui:
             self.ee_entries[key].insert(0, f"{val:.2f}")
 
     def _move_joints(self) -> None:
+        """「관절 이동」: 입력칸의 관절값으로 이동을 시작한다."""
         try:
             target: dict[str, float] = {}
             for name in URDF_JOINT_NAMES:
@@ -508,6 +532,7 @@ class PendantGui:
         self._ctrl.start_joint_goto(target)
 
     def _goto_init_pose(self) -> None:
+        """「초기자세」: 입력칸을 초기자세 값으로 바꾸고 그 자세로 이동한다."""
         from motion.robot_kinematics import INIT_POSE_JOINTS_DEG
 
         for name in URDF_JOINT_NAMES:
@@ -521,6 +546,7 @@ class PendantGui:
         self._ctrl.init_pose()
 
     def _move_ee(self) -> None:
+        """「TCP 이동」: 입력칸의 위치·자세로 이동을 시작한다."""
         try:
             xyz = np.array([float(self.ee_entries[k].get()) for k in ("x", "y", "z")], dtype=float)
             rpy = np.array(
@@ -533,6 +559,7 @@ class PendantGui:
         self._ctrl.start_ee_goto(xyz, rpy)
 
     def _on_tcp_jog_speed(self, value: float) -> None:
+        """XYZ 조그 속도 슬라이더 (mm/s)."""
         lo = int(JOG_VEL_MIN_MPS * 1000.0)
         hi = int(JOG_VEL_MAX_MPS * 1000.0)
         mm = int(round(float(value)))
@@ -541,12 +568,14 @@ class PendantGui:
         self._tcp_vel_label.configure(text=f"XYZ jog  {mm} mm/s")
 
     def _on_rpy_jog_speed(self, value: float) -> None:
+        """Rx/Ry/Rz 조그 속도 슬라이더 (deg/s)."""
         deg = int(round(float(value)))
         deg = max(int(JOG_ROT_MIN_DEG_S), min(int(JOG_ROT_MAX_DEG_S), deg))
         self._ctrl.set_rpy_jog_deg_s(deg)
         self._rpy_vel_label.configure(text=f"Rx/Ry/Rz jog  {deg} deg/s")
 
     def _set_jog_preset(self, mm_s: float, deg_s: float) -> None:
+        """느림/보통/빠름 버튼: 두 슬라이더를 함께 옮긴다."""
         self._tcp_vel_slider.set(mm_s)
         self._rpy_vel_slider.set(deg_s)
         self._on_tcp_jog_speed(mm_s)
@@ -565,20 +594,24 @@ class PendantGui:
         self._apply_speed_pct(value)
 
     def _apply_speed_pct(self, value: float) -> None:
+        """관절 속도 % 를 컨트롤러에 넣고 표시를 deg/s 로 바꾼다."""
         pct = int(round(float(value)))
         pct = max(int(SPEED_PCT_MIN), min(int(SPEED_PCT_MAX), pct))
         self._ctrl.set_speed_pct(pct)
         self._speed_label.configure(text=self._speed_label_text(pct))
 
     def _on_trail_toggle(self) -> None:
+        """「TCP 경로」 체크: Meshcat 에 TCP 지나간 선을 그릴지."""
         self._viz.set_tcp_trail_enabled(bool(self._trail_var.get()))
 
     def _on_xyz_frame(self, value: str) -> None:
+        """XYZ 조그 기준 전환: base (로봇 베이스 축) / TCP (그리퍼 축)."""
         frame = ROT_FRAME_TCP if str(value).upper() == "TCP" else ROT_FRAME_BASE
         self._ctrl.set_xyz_frame(frame)
         self._update_frame_label(frame, self._ctrl.rot_frame())
 
     def _on_rot_frame(self, value: str) -> None:
+        """Rx/Ry/Rz 조그 기준 전환: base / TCP."""
         frame = ROT_FRAME_TCP if str(value).upper() == "TCP" else ROT_FRAME_BASE
         self._ctrl.set_rot_frame(frame)
         self._apply_rpy_label_colors(frame)
@@ -604,6 +637,7 @@ class PendantGui:
         )
 
     def _toggle_connect(self) -> None:
+        """Connect / Disconnect 버튼. 연결하면 입력칸을 실기 값으로 채운다."""
         st = self._ctrl.snapshot()
         if st.connected:
             self._ctrl.disconnect()
@@ -622,6 +656,7 @@ class PendantGui:
             self.connect_btn.configure(state="normal")
 
     def _schedule_display(self) -> None:
+        """컨트롤러 상태를 읽어 Meshcat 과 모든 표시를 갱신하고, DISPLAY_MS 뒤에 다시 부른다."""
         if self._closed:
             return
         st = self._ctrl.snapshot()
@@ -639,6 +674,7 @@ class PendantGui:
             ("yaw", rpy[2]),
         ):
             _set_text(self._tcp_live_labels[key], f"{val:7.2f}")
+        # 오차는 실기일 때만 있다: 명령 TCP − 실측 TCP.
         if st.ee_err_mm is None or st.err_xyz_mm is None:
             _set_text(self.err_label, "err:  (virtual)")
         else:
@@ -656,6 +692,7 @@ class PendantGui:
             _set_text(self.mode_label, "mode: virtual")
             if self.connect_btn.cget("state") != "disabled":
                 _set_text(self.connect_btn, "Connect")
+        # 기준 좌표 버튼이 컨트롤러 상태와 다르면 상태에 맞춘다.
         self._update_frame_label(st.xyz_frame, st.rot_frame)
         xyz_val = "TCP" if st.xyz_frame == ROT_FRAME_TCP else "base"
         if self._xyz_frame_seg.get() != xyz_val:
@@ -673,6 +710,7 @@ class PendantGui:
             self.root.after(DISPLAY_MS, self._schedule_display)
 
     def on_close(self) -> None:
+        """창 닫기. 실기에 토크가 켜져 있으면 먼저 쉬는 자세로 옮긴 뒤 닫는다."""
         if self._closing:
             return
         self._closing = True
@@ -687,6 +725,7 @@ class PendantGui:
         self._finish_close()
 
     def _poll_shutdown(self, deadline: float) -> None:
+        """쉬는 자세 이동이 끝나거나 시간이 지나면 닫는다."""
         if self._closed:
             return
         if not self._ctrl.goto_active() or time.monotonic() >= deadline:
@@ -695,6 +734,7 @@ class PendantGui:
         self.root.after(50, lambda: self._poll_shutdown(deadline))
 
     def _finish_close(self) -> None:
+        """제어 루프와 Meshcat 을 끄고 창을 없앤다."""
         if self._closed:
             return
         self._closed = True

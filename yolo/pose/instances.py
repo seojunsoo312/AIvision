@@ -34,7 +34,7 @@ class InstanceCloud:
 
 
 def height_above_plane(xyz: np.ndarray, plane: np.ndarray) -> np.ndarray:
-    """Desk plane ax+by+cz+d=0. Camera-side objects have negative signed distance."""
+    """책상 평면 ax+by+cz+d=0. 카메라 쪽 물체는 부호 거리가 음수다."""
     pts = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
     if len(pts) == 0:
         return np.zeros(0, dtype=np.float64)
@@ -64,7 +64,7 @@ def collect_instances(
     stride: int,
     T_base_cam: np.ndarray | None,
 ) -> list[InstanceCloud]:
-    """One cloud per YOLO box, desk foreground removed."""
+    """YOLO 상자마다 점군 하나, 책상 바탕은 뺀다."""
     h, w = bgr.shape[:2]
     out: list[InstanceCloud] = []
     obb = getattr(result, "obb", None)
