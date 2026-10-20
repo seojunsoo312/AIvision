@@ -6,6 +6,24 @@
 
 > Jetson에 Claude Code가 있으면 `docs/jetson_claude_prompt.md`의 프롬프트로 이 문서의 확인을 한 번에 맡길 수 있습니다.
 
+## 빠른 설치 (스크립트)
+
+아래 2~5번과 확인을 스크립트로 한 번에 합니다. 납품 보드처럼 사람이 직접 까는 경우에 씁니다. 인터넷이 필요하고, 처음에 sudo 비밀번호를 한 번 묻습니다. 중간에 멈추면 같은 명령을 다시 실행합니다. 끝난 단계는 건너뜁니다.
+
+```bash
+git clone https://github.com/seojunsoo312/SO-ARM_xyzrpy_control.git ~/AIvision
+bash ~/AIvision/deploy/setup_jetson.sh          # 보드 설정, Orbbec SDK, conda, AIvision 환경, 점검 (30분~1시간)
+# 다시 로그인한 뒤, 팔을 하나씩 꽂으며
+bash ~/AIvision/deploy/make_serial_rules.sh     # /dev/so101_follower, /dev/so101_leader 이름
+bash ~/AIvision/deploy/calibrate_arms.sh        # 팔로워 → 리더 캘리브 (기존 파일은 백업)
+~/miniforge3/envs/AIvision/bin/python ~/AIvision/deploy/check_board.py   # 언제든 다시 점검
+```
+
+- `yolo/weights/best.pt`는 git에 없으므로 USB로 복사합니다. 없으면 점검에서 「경고」로 나옵니다.
+- 이미 `~/miniconda3`가 있는 보드는 그 conda를 씁니다. 없으면 `~/miniforge3`를 설치합니다(위 마지막 줄의 경로도 그쪽).
+- 로그는 홈에 `aivision_setup_날짜.log`로 남습니다.
+- 점검(`check_board.py`)은 항목마다 통과·경고·실패를 냅니다. 팔·카메라가 안 꽂혀 있으면 경고이고, 실패가 있으면 종료 코드 1입니다.
+
 ## 0. 먼저 알아 둘 것
 
 - 환경은 **`AIvision` 하나, Python 3.10** 입니다. 펜던트, 노트북 실습, 카메라 창, YOLO 학습, 손눈 캘리브를 모두 여기서 실행합니다.
@@ -147,6 +165,8 @@ cd ~/AIvision && python -c "from motion import Arm; a = Arm(); print(a.where());
 
 ## 6. 팔 설정 (보드마다, 강사)
 
+스크립트로는 `deploy/make_serial_rules.sh`, `deploy/calibrate_arms.sh`입니다. 아래는 손으로 할 때의 순서입니다.
+
 ### 시리얼 포트 이름
 
 코드는 팔로워를 `/dev/so101_follower`로 엽니다. 팔 보드의 시리얼 번호로 이름을 붙입니다. 팔을 하나씩 꽂고 번호를 읽습니다.
@@ -210,16 +230,32 @@ ls -l /dev/so101_*
 
 ## 8. 나머지 보드에 복제
 
-마스터의 디스크를 이미지로 떠서 다른 보드에 씁니다. 한 대씩 설치하는 것보다 빠르고, 모든 보드가 같은 환경이 됩니다.
+학생용 한 대(마스터)를 「빠른 설치」로 끝까지 깔고, 그 NVMe SSD를 M.2 복제기로 나머지 SSD에 통째로 복사합니다. 한 대씩 설치하는 것보다 빠르고, 모든 보드가 같은 환경이 됩니다. 강의자 보드는 따로 쓰고 복제 원본으로 쓰지 않습니다.
 
-- microSD로 부팅: SD 카드 전체를 이미지로 떠서(예: `dd`, Balena Etcher) 같은 용량 이상의 카드에 씁니다.
-- NVMe로 부팅: NVIDIA L4T의 백업·복원 도구(`l4t_backup_restore.sh`)를 씁니다.
+**마스터에서 (복제 전)**
 
-복제한 뒤 보드마다 할 일입니다.
+1. JetPack 플래시(NVMe) → `bash deploy/setup_jetson.sh`. 스크립트가 마지막에 pip·conda 캐시를 지워 복제할 용량을 줄입니다.
+2. `yolo/weights/best.pt`를 USB로 복사하고, 카메라를 꽂아 `check_board.py`의 카메라 + YOLO 항목까지 확인합니다.
+3. **팔 시리얼 규칙과 캘리브는 하지 않습니다.** 팔마다 다르므로 복제 뒤 보드마다 합니다. 그래서 복제 전에 지울 것이 없습니다.
+4. `sudo shutdown now`로 완전히 끈 뒤 SSD를 뺍니다. 켜진 채로 빼거나 강제로 끄면 깨진 파일 시스템이 그대로 복사됩니다.
 
-1. 컴퓨터 이름 바꾸기: `sudo hostnamectl set-hostname jetson-01`
-2. 6번(시리얼 번호 규칙, 리더·팔로워 캘리브). 복제한 캘리브 파일은 마스터 팔의 값이라 그대로 쓰면 안 됩니다.
-3. 카메라 캘리브와 YOLO 학습은 수업에서 학생이 합니다. 기수 사이에는 `python reset_class.py --all`. 이때 `yolo/weights/best.pt`도 지워지므로, 학생이 학습하기 전에는 카메라 창이 켜지지 않습니다.
+**복제할 때**
+
+- 받는 SSD는 마스터 SSD와 **같은 모델·용량**으로 합니다. 섹터 단위로 복사하므로 조금이라도 작으면 실패하거나 뒤가 잘립니다.
+- 받는 SSD에는 아무것도 설치할 필요가 없습니다. 복제기가 마스터 내용으로 통째로 덮어씁니다.
+- 보드 펌웨어(QSPI)는 SSD가 아니라 보드에 있어 복제로 바뀌지 않습니다. 대신 부팅 때마다 `nv-l4t-bootloader-config` 서비스가 SSD의 펌웨어 패키지 버전(`nvidia-l4t-bootloader`)과 보드 펌웨어 버전을 비교해, 보드 쪽이 낮으면 자동으로 올립니다(재부팅 한 번 더 필요할 수 있음). 출고 펌웨어가 너무 오래돼 복제 SSD로 아예 부팅하지 못하는 보드만 SDK Manager로 한 번 플래시합니다.
+- 7대에 다 복제하기 전에 **한 대만 먼저** 꽂아 부팅, `sudo nvpmodel -q`의 MAXN_SUPER, `check_board.py`를 확인합니다.
+
+**보드마다 (마스터 포함, 복제 뒤 한 번)**
+
+```bash
+bash ~/AIvision/deploy/make_serial_rules.sh     # 팔 시리얼 이름 (팔을 하나씩 꽂으며)
+bash ~/AIvision/deploy/calibrate_arms.sh        # 팔로워 → 리더 캘리브
+sudo hostnamectl set-hostname jetson-03         # 선택: 보드 구분용 이름
+```
+
+- 카메라 캘리브와 YOLO 학습은 수업에서 학생이 합니다. 기수 사이에는 `python reset_class.py --all`. 이때 `yolo/weights/best.pt`도 지워지므로, 학생이 학습하기 전에는 카메라 창이 켜지지 않습니다.
+- machine-id, SSH 호스트 키는 8대가 같아지지만 수업 사용에는 문제가 없습니다. Ubuntu 22.04 NetworkManager의 IPv4 DHCP는 MAC 주소로 기기를 구분하므로 IP가 겹치지 않습니다. 보드에 SSH로 들어갈 일이 생기면 그때 `sudo rm /etc/ssh/ssh_host_* && sudo dpkg-reconfigure openssh-server`로 키를 새로 만듭니다.
 
 ## 9. 업데이트
 
