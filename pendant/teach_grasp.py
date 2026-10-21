@@ -112,6 +112,9 @@ def _load_user_pick_run():
     return run
 
 
+# 상태 글자 줄바꿈 너비 (배율 1.0 px). 오른쪽 아래 칸 너비에 맞춘다.
+STATUS_WRAP_PX = 400
+
 class TeachGraspGui:
     def __init__(
         self,
@@ -233,15 +236,6 @@ class TeachGraspGui:
             ("place_yaw", "Rz", "yaw"),
         ):
             self._rpy_row(host, key, float(shown[axis]), label)
-        self._rpy_hint = ctk.CTkLabel(
-            host,
-            text="",
-            text_color="#9ca3af",
-            anchor="w",
-        )
-        self._rpy_hint.pack(fill="x", padx=8, pady=(0, 2))
-        self._update_rpy_hint()
-
         hide_row = ctk.CTkFrame(host, fg_color="transparent")
         hide_row.pack(fill="x", padx=8, pady=(2, 2))
         self._grasp_hide_var = ctk.BooleanVar(value=False)
@@ -263,39 +257,37 @@ class TeachGraspGui:
         )
         self._region_hide_cb.pack(side="left", padx=(12, 0))
 
-        self._panel_labels.append(self._rpy_hint)
-
         actions = ctk.CTkFrame(actions_host, fg_color="transparent")
         actions.pack(fill="x", padx=14, pady=(4, 8))
         actions.grid_columnconfigure(0, weight=1)
         actions.grid_columnconfigure(1, weight=1)
         btn_apply = ctk.CTkButton(actions, text="적용", command=self.apply)
-        btn_apply.grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 6))
+        btn_apply.grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 8))
         btn_reset = ctk.CTkButton(actions, text="물체 초기화", command=self.reset_place)
-        btn_reset.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=(0, 6))
+        btn_reset.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=(0, 8))
         self._panel_buttons.extend((btn_apply, btn_reset))
         self._btn_pre = ctk.CTkButton(actions, text="대기 위치로", command=self.goto_pre)
         self._btn_grasp = ctk.CTkButton(actions, text="집기 위치로", command=self.goto_grasp)
-        self._btn_pre.grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(0, 6))
-        self._btn_grasp.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(0, 6))
+        self._btn_pre.grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(0, 8))
+        self._btn_grasp.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(0, 8))
         self._btn_seq = ctk.CTkButton(
             actions,
             text="픽앤플레이스",
             command=self.start_pick_place,
-            height=56,
-            corner_radius=12,
+            height=46,
+            corner_radius=6,
             font=ui_font(18),
         )
-        self._btn_seq.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self._btn_seq.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self._btn_user_seq = ctk.CTkButton(
             actions,
             text="픽앤플레이스(유저생성)",
             command=self.start_user_pick_place,
-            height=56,
-            corner_radius=12,
+            height=46,
+            corner_radius=6,
             font=ui_font(18),
         )
-        self._btn_user_seq.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self._btn_user_seq.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self._btn_init = ctk.CTkButton(
             actions, text="초기자세로 이동", command=self.snap_init_pose
         )
@@ -318,7 +310,7 @@ class TeachGraspGui:
             self._btn_init.configure(state="disabled")
 
         rand_row = ctk.CTkFrame(actions_host, fg_color="transparent")
-        rand_row.pack(fill="x", padx=14, pady=(0, 2))
+        rand_row.pack(fill="x", padx=14, pady=(4, 4))
         btn_rand = ctk.CTkButton(
             rand_row,
             text="물체 랜덤 생성",
@@ -336,7 +328,7 @@ class TeachGraspGui:
         self._warn_label.pack(side="left", padx=(12, 0), fill="x", expand=True)
 
         mode_row = ctk.CTkFrame(actions_host, fg_color="transparent")
-        mode_row.pack(fill="x", padx=14, pady=(0, 6))
+        mode_row.pack(fill="x", padx=14, pady=(4, 8))
         mode_specs = (
             ("stand", "세우기"),
             ("lie", "눕히기"),
@@ -359,15 +351,27 @@ class TeachGraspGui:
 
         foot = ctk.CTkFrame(actions_host, fg_color="transparent")
         foot.pack(fill="x", padx=14, pady=(0, 4))
-        self._row(foot, "approach_d", f"{approach_d0:.1f}", "d mm (pre)")
-        self._row(foot, "approach_a", f"{approach_a0:.1f}", "a mm (grasp)")
+        # 두 줄 × 두 칸: 왼쪽 = 접근 거리 d/a, 오른쪽 = 내려놓을 위치 x/y (베이스 mm).
+        drop_x0, drop_y0 = self._drop_xy
+        row_d = ctk.CTkFrame(foot, fg_color="transparent")
+        row_d.pack(fill="x", pady=3)
+        self._pair(row_d, "approach_d", f"{approach_d0:.1f}", "d mm (대기)")
+        self._pair(row_d, "drop_x", f"{drop_x0:.1f}", "놓기 x mm")
+        row_a = ctk.CTkFrame(foot, fg_color="transparent")
+        row_a.pack(fill="x", pady=3)
+        self._pair(row_a, "approach_a", f"{approach_a0:.1f}", "a mm (집기)")
+        self._pair(row_a, "drop_y", f"{drop_y0:.1f}", "놓기 y mm")
         self.entries["approach_d"].bind("<FocusOut>", lambda _e: self._schedule_live_apply())
         self.entries["approach_d"].bind("<Return>", lambda _e: self._schedule_live_apply())
         self.entries["approach_a"].bind("<FocusOut>", lambda _e: self._schedule_live_apply())
         self.entries["approach_a"].bind("<Return>", lambda _e: self._schedule_live_apply())
 
-        self._status = ctk.CTkLabel(actions_host, text="", anchor="w")
-        self._status.pack(fill="x", padx=14, pady=(0, 6))
+        # 상태 글자는 두 줄 자리를 미리 잡고 칸 너비에서 줄바꿈한다.
+        # 한 줄로 두면 긴 글자가 칸을 오른쪽으로 늘려 버튼까지 같이 길어진다.
+        self._status = ctk.CTkLabel(
+            actions_host, text="", anchor="nw", justify="left", height=40, wraplength=STATUS_WRAP_PX
+        )
+        self._status.pack(fill="x", padx=14, pady=(0, 4))
         btn_load = ctk.CTkButton(
             actions_host,
             text="물체 위치 불러오기",
@@ -376,7 +380,7 @@ class TeachGraspGui:
             hover_color="#4ADE80",
             text_color="#14532D",
         )
-        btn_load.pack(fill="x", padx=14, pady=(0, 14))
+        btn_load.pack(fill="x", padx=14, pady=(0, 12))
         self._panel_buttons.append(btn_load)
 
         if self._embedded and not self._panel_enabled:
@@ -396,7 +400,7 @@ class TeachGraspGui:
         import customtkinter as ctk
 
         row = ctk.CTkFrame(parent)
-        row.pack(fill="x", pady=3, padx=6)
+        row.pack(fill="x", pady=4, padx=6)
         return row
 
     def _section(self, parent, title: str) -> None:
@@ -447,17 +451,18 @@ class TeachGraspGui:
             closed=True,
         )
 
-    def _row(self, parent, key: str, value: str, label: str) -> None:
+    def _pair(self, row, key: str, value: str, label: str) -> None:
+        """한 줄 안의 [이름, 짧은 입력 칸] 한 쌍. 쌍마다 줄의 절반을 차지한다."""
         import customtkinter as ctk
 
-        row = ctk.CTkFrame(parent)
-        row.pack(fill="x", padx=8, pady=2)
-        lab = ctk.CTkLabel(row, text=label, width=110, anchor="w")
-        lab.pack(side="left")
+        cell = ctk.CTkFrame(row, fg_color="transparent")
+        cell.pack(side="left", fill="x", expand=True)
+        lab = ctk.CTkLabel(cell, text=label, width=92, anchor="w")
+        lab.pack(side="left", padx=(0, 6))
         self._panel_labels.append(lab)
-        ent = ctk.CTkEntry(row, width=140)
+        ent = ctk.CTkEntry(cell, width=76)
         ent.insert(0, value)
-        ent.pack(side="left", padx=6)
+        ent.pack(side="left")
         self.entries[key] = ent
 
     def _slider_limits(self, key: str) -> tuple[float, float]:
@@ -563,13 +568,6 @@ class TeachGraspGui:
         roll, pitch, yaw = rpy_extrinsic_to_body_xyz(self._place_rpy_prev)
         return {"roll": float(roll), "pitch": float(pitch), "yaw": float(yaw)}
 
-    def _update_rpy_hint(self) -> None:
-        if self._place_rpy_frame == "base":
-            text = "슬라이더 = 베이스 고정축 회전. 숫자는 저장되는 베이스 각."
-        else:
-            text = "슬라이더 = 물체에 붙은 축 회전. Rz만 돌리면 Rz 숫자만 바뀌는 건 정상."
-        self._rpy_hint.configure(text=text)
-
     def _on_place_rpy_frame(self, value: str) -> None:
         if self._embedded and not self._panel_enabled:
             return
@@ -578,7 +576,6 @@ class TeachGraspGui:
             return
         self._place_rpy_frame = frame
         self._sync_place_rpy_ui()
-        self._update_rpy_hint()
 
     def _sync_place_rpy_ui(self, *, keep_axis: str | None = None) -> None:
         """보이는 칸을 현재 표기로 맞춘다. 드래그 중인 축 슬라이더는 유지."""
@@ -1102,7 +1099,7 @@ class TeachGraspGui:
             return
         try:
             place, _grasp = self._read_place_grasp()
-            drop_xy = self._drop_xy
+            drop_xy = (self._read_float("drop_x"), self._read_float("drop_y"))
         except ValueError as exc:
             self._set_status(f"입력 오류: {exc}", error=True)
             return

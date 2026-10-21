@@ -7,7 +7,10 @@
 ```bash
 python pendant/main.py           # 조그 창
 python pendant/main.py --grasp   # 조그 창 + 물건 위치 칸
+python pendant/main.py --grasp --scale 0.6   # 창·글자 크기 직접 지정
 ```
+
+창은 배율 0.9로 화면 왼쪽 위에 뜹니다. 오른쪽 빈자리에 Meshcat 브라우저를 놓습니다. 크기가 안 맞으면 `--scale`로 직접 정합니다 (작을수록 작아짐).
 
 ## 파일
 

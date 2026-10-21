@@ -42,10 +42,19 @@ def enable_xft_tk() -> bool:
     return True
 
 
+BUTTON_CORNER_RADIUS = 6
+
+
 def apply_ui_theme() -> None:
-    """CustomTkinter 기본 글꼴을 Noto Sans CJK KR 로, 버튼은 조금 더 둥글게."""
+    """CustomTkinter 기본 글꼴을 Noto Sans CJK KR 로, 버튼 모서리는 작게."""
     import customtkinter as ctk
     from customtkinter.windows.widgets.theme import ThemeManager
+    from customtkinter.windows.widgets.core_rendering import DrawEngine
+
+    # 둥근 모서리를 다각형으로 그린다. 리눅스 기본 (글꼴 모양) 은 0.9 같은 소수
+    # 배율에서 아래 모서리가 버튼 몸통과 1px 어긋나 점처럼 튀어나온다.
+    # 다각형은 계단이 지므로 반지름을 작게 (BUTTON_CORNER_RADIUS) 둔다.
+    DrawEngine.preferred_drawing_method = "polygon_shapes"
 
     if not ThemeManager.theme:
         ctk.set_default_color_theme("blue")
@@ -55,7 +64,36 @@ def apply_ui_theme() -> None:
         font["size"] = 14
     button = ThemeManager.theme.get("CTkButton")
     if isinstance(button, dict):
-        button["corner_radius"] = 10
+        # 0.9 같은 소수 배율에서 큰 반지름은 아래 모서리가 1px 어긋나 찌그러져 보인다.
+        button["corner_radius"] = BUTTON_CORNER_RADIUS
+    # 슬라이더 진행 막대를 트랙과 같은 색으로. 소수 배율에서 진행 막대가
+    # 양 끝 회색 조각으로만 그려져 손잡이 뒤에 겹쳐 보인다.
+    _default_button_font()
+    slider = ThemeManager.theme.get("CTkSlider")
+    if isinstance(slider, dict) and "fg_color" in slider:
+        slider["progress_color"] = slider["fg_color"]
+
+
+# 기본 버튼 글자 크기. 14 는 0.9 배율에서 글자 칸(24px)이 버튼(26px)을 거의 채워
+# 글자 배경이 버튼 아래로 1~2px 삐져나온다. 글꼴을 직접 준 버튼은 그대로.
+BUTTON_FONT_SIZE = 13
+
+
+def _default_button_font() -> None:
+    """font 를 안 준 CTkButton 에 BUTTON_FONT_SIZE 글꼴을 넣는다. 여러 번 불러도 된다."""
+    import customtkinter as ctk
+
+    if getattr(ctk.CTkButton.__init__, "_ui_style_patched", False):
+        return
+    orig = ctk.CTkButton.__init__
+
+    def init(self, *args, **kwargs):
+        if kwargs.get("font") is None:
+            kwargs["font"] = ctk.CTkFont(family=UI_FAMILY, size=BUTTON_FONT_SIZE)
+        orig(self, *args, **kwargs)
+
+    init._ui_style_patched = True
+    ctk.CTkButton.__init__ = init
 
 
 def apply_root_fonts(root) -> None:
@@ -94,3 +132,20 @@ def mono_font(size: int = 14):
     import customtkinter as ctk
 
     return ctk.CTkFont(family=MONO_FAMILY, size=size)
+
+
+# 펜던트 원래 크기 (배율 1.0, gui_app.py 의 geometry).
+PENDANT_BASE_W = 980
+PENDANT_BASE_H = 1126
+# 기본 배율. --scale 로 바꾼다.
+DEFAULT_UI_SCALE = 0.9
+
+
+def apply_ui_scale(root, scale: float | None = None) -> float:
+    """창 크기와 글자를 함께 줄이거나 키운다. 위젯을 만들기 전에 부른다."""
+    import customtkinter as ctk
+
+    scale = float(DEFAULT_UI_SCALE if scale is None else scale)
+    ctk.set_widget_scaling(scale)
+    ctk.set_window_scaling(scale)
+    return scale

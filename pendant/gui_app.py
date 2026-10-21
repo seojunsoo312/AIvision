@@ -12,7 +12,15 @@ for path in (_PROJECT, _PENDANT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from ui_style import apply_root_fonts, apply_ui_theme, enable_xft_tk, mono_font, ui_font
+from ui_style import (
+    PENDANT_BASE_H,
+    PENDANT_BASE_W,
+    apply_root_fonts,
+    apply_ui_theme,
+    enable_xft_tk,
+    mono_font,
+    ui_font,
+)
 
 # 한글 글꼴: tkinter 를 import 하기 전에 시스템 Xft Tk 를 먼저 읽어야 한다.
 enable_xft_tk()
@@ -101,53 +109,48 @@ class PendantGui:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         apply_root_fonts(self.root)
 
-        # --- 맨 위: 안내 한 줄과 현재 TCP·오차·모드 표시 ---
-        status = ctk.CTkLabel(
-            root,
-            text=f"+/− 조그 · 속도% 공통 · Meshcat: {meshcat_url or 'printed URL'}",
-            anchor="w",
-        )
-        status.pack(side="top", fill="x", padx=12, pady=(8, 2))
+        # --- 맨 위: 왼쪽 = 안내 한 줄과 현재 TCP·오차·모드, 오른쪽 = 큰 버튼 (_build_top_buttons) ---
+        header = ctk.CTkFrame(root, fg_color="transparent")
+        header.pack(side="top", fill="x", padx=12, pady=(8, 6))
+        info = ctk.CTkFrame(header, fg_color="transparent")
+        info.pack(side="left", anchor="n")
+        self._top_btns = ctk.CTkFrame(header, fg_color="transparent")
+        self._top_btns.pack(side="right", anchor="n")
 
-        self.tcp_label = ctk.CTkLabel(root, text="TCP: —", font=mono_font(14), anchor="w")
-        self.rpy_label = ctk.CTkLabel(root, text="RxRyRz: —", font=mono_font(14), anchor="w")
-        self.err_label = ctk.CTkLabel(
-            root, text="err:  (virtual)", font=mono_font(14), anchor="w"
-        )
-        self.mode_label = ctk.CTkLabel(root, text="mode: virtual", font=mono_font(), anchor="w")
-        self.rot_frame_label = ctk.CTkLabel(
-            root,
-            text="xyz: base (+X forward) · rot: base (+X forward)",
-            font=mono_font(14),
-            anchor="w",
-        )
-        self.fault_label = ctk.CTkLabel(root, text="", text_color="#f87171", anchor="w")
-        self.tcp_label.pack(side="top", anchor="w", padx=12)
-        self.rpy_label.pack(side="top", anchor="w", padx=12)
-        self.err_label.pack(side="top", anchor="w", padx=12)
-        self.mode_label.pack(side="top", anchor="w", padx=12)
-        self.rot_frame_label.pack(side="top", anchor="w", padx=12)
-        self.fault_label.pack(side="top", anchor="w", padx=12, pady=(0, 2))
+        # 상태 글자 4줄. 줄 높이를 줄여 오른쪽 큰 버튼 두 줄과 비슷한 높이로 맞춘다.
+        line = {"height": 22, "anchor": "w"}
+        top_row = ctk.CTkFrame(info, fg_color="transparent")
+        top_row.pack(side="top", anchor="w")
+        self.mode_label = ctk.CTkLabel(top_row, text="mode: virtual", font=mono_font(), **line)
+        self.mode_label.pack(side="left")
+        ctk.CTkLabel(
+            top_row, text=f"  ·  Meshcat: {meshcat_url or 'printed URL'}", **line
+        ).pack(side="left")
+        self.fault_label = ctk.CTkLabel(top_row, text="", text_color="#f87171", **line)
+        self.fault_label.pack(side="left", padx=(12, 0))
 
-        # --- 본문 4칸: 관절 | TCP | 사물 위치 | 사물 위치 동작 버튼 ---
-        bar = ctk.CTkFrame(root, fg_color="transparent")
+        self.tcp_label = ctk.CTkLabel(info, text="TCP: —", font=mono_font(14), **line)
+        self.rpy_label = ctk.CTkLabel(info, text="RxRyRz: —", font=mono_font(14), **line)
+        self.err_label = ctk.CTkLabel(info, text="err:  (virtual)", font=mono_font(14), **line)
+        for lab in (self.tcp_label, self.rpy_label, self.err_label):
+            lab.pack(side="top", anchor="w")
+
+        # --- 본문 2×2: 위 = 관절 | TCP, 아래 = 사물 위치 | 사물 위치 동작 버튼 ---
+        # 작은 모니터에서도 오른쪽에 Meshcat 브라우저 자리가 남도록 세로로 쌓는다.
         body = ctk.CTkFrame(root, fg_color="transparent")
-        body.grid_columnconfigure(0, weight=1)
-        body.grid_columnconfigure(1, weight=1)
-        body.grid_rowconfigure(0, weight=1)
-        body.grid_columnconfigure(2, weight=0, minsize=500)
-        body.grid_columnconfigure(3, weight=0, minsize=440)
+        body.grid_columnconfigure(0, weight=1, uniform="col")
+        body.grid_columnconfigure(1, weight=1, uniform="col")
 
-        self.root.minsize(1760, 700)
-        self.root.geometry("1980x820")
+        self.root.minsize(PENDANT_BASE_W - 100, PENDANT_BASE_H - 200)
+        self.root.geometry(f"{PENDANT_BASE_W}x{PENDANT_BASE_H}+0+0")  # 왼쪽 위. 오른쪽은 Meshcat 자리
         left = ctk.CTkFrame(body)
         right = ctk.CTkFrame(body)
         self._grasp_col = ctk.CTkFrame(body)
         self._grasp_act_col = ctk.CTkFrame(body)
         left.grid(row=0, column=0, sticky="new", padx=(0, 6))
-        right.grid(row=0, column=1, sticky="new", padx=(6, 6))
-        self._grasp_col.grid(row=0, column=2, sticky="new", padx=(0, 6))
-        self._grasp_act_col.grid(row=0, column=3, sticky="new")
+        right.grid(row=0, column=1, sticky="new", padx=(6, 0))
+        self._grasp_col.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=(12, 0))
+        self._grasp_act_col.grid(row=1, column=1, sticky="new", padx=(6, 0), pady=(12, 0))
 
         # --- 왼쪽 칸: 관절마다 [이름, 현재값, −, +, 목표 입력칸, 단위] ---
         ctk.CTkLabel(left, text="Joints", anchor="w").pack(
@@ -157,13 +160,13 @@ class PendantGui:
         self.joint_entries: dict[str, ctk.CTkEntry] = {}
         for name in URDF_JOINT_NAMES:
             row = ctk.CTkFrame(left)
-            row.pack(fill="x", pady=3, padx=6)
+            row.pack(fill="x", pady=4, padx=6)
             alias = LEROBOT_FROM_URDF[name]
             unit = "0–100" if name == GRIPPER_JOINT else "deg"
             ctk.CTkLabel(
                 row,
                 text=f"{_joint_ui_name(name)} ({alias})",
-                width=132,
+                width=156,
                 anchor="w",
                 font=mono_font(),
             ).pack(side="left", padx=(4, 2))
@@ -193,13 +196,32 @@ class PendantGui:
             ent.pack(side="left", padx=(8, 4))
             self.joint_entries[name] = ent
             ctk.CTkLabel(row, text=unit, width=40, anchor="w").pack(side="left")
+        # 그리퍼 (S7 아래): 누르고 있는 동안만 열리거나 닫힌다.
+        grip = ctk.CTkFrame(left)
+        grip.pack(fill="x", pady=4, padx=6)
+        ctk.CTkLabel(grip, text="Gripper", width=70, anchor="w").pack(side="left", padx=(4, 8))
+        self._hold_button(
+            grip,
+            "Close",
+            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, -1),
+            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, 0),
+            width=8,
+        )
+        self._hold_button(
+            grip,
+            "Open",
+            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, 1),
+            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, 0),
+            width=8,
+        )
+
         # TCP의 현재값/이동 버튼과 같은 높이가 되도록 아래에서 늘린다.
         self._joint_btn_spacer = ctk.CTkFrame(left, fg_color="transparent", height=0)
         self._joint_btn_spacer.pack(fill="x")
         self._joint_btn_spacer.pack_propagate(False)
         goto_btn = ctk.CTkFrame(left, fg_color="transparent")
         self._joint_goto_row = goto_btn
-        goto_btn.pack(fill="x", padx=6, pady=(4, 2))
+        goto_btn.pack(fill="x", padx=6, pady=(8, 4))
         ctk.CTkButton(goto_btn, text="현재값 넣기", width=120, command=self._fill_joints).pack(
             side="left", padx=(0, 6)
         )
@@ -261,34 +283,15 @@ class PendantGui:
         self._cart_row(right, "Rz", "wz", entry_key="yaw", unit="deg", color=_RPY_COLOR["Rz"], store_label=True)
         ee_btn = ctk.CTkFrame(right, fg_color="transparent")
         self._ee_goto_row = ee_btn
-        ee_btn.pack(fill="x", padx=6, pady=(4, 2))
+        ee_btn.pack(fill="x", padx=6, pady=(8, 4))
         ctk.CTkButton(ee_btn, text="현재값 넣기", width=120, command=self._fill_ee).pack(
             side="left", padx=(0, 6)
         )
         ctk.CTkButton(ee_btn, text="TCP 이동", width=110, command=self._move_ee).pack(side="left")
 
-        # 그리퍼: 누르고 있는 동안만 열리거나 닫힌다.
-        grip = ctk.CTkFrame(right)
-        grip.pack(fill="x", pady=(12, 3), padx=6)
-        ctk.CTkLabel(grip, text="Gripper", width=70, anchor="w").pack(side="left", padx=(4, 8))
-        self._hold_button(
-            grip,
-            "Close",
-            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, -1),
-            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, 0),
-            width=8,
-        )
-        self._hold_button(
-            grip,
-            "Open",
-            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, 1),
-            lambda: self._ctrl.set_joint_jog(GRIPPER_JOINT, 0),
-            width=8,
-        )
-
         # TCP 조그 속도: 프리셋 버튼 + 위치 (mm/s) · 자세 (deg/s) 슬라이더.
         vel = ctk.CTkFrame(right)
-        vel.pack(fill="x", padx=6, pady=(4, 8))
+        vel.pack(fill="x", padx=6, pady=(8, 8))
         jog_preset = ctk.CTkFrame(vel, fg_color="transparent")
         jog_preset.pack(fill="x", padx=4, pady=(6, 2))
         for name, mm_s, deg_s in (
@@ -306,8 +309,9 @@ class PendantGui:
             vel,
             text=f"XYZ jog  {JOG_VEL_MPS * 1000:.0f} mm/s",
             anchor="w",
+            height=22,
         )
-        self._tcp_vel_label.pack(anchor="w", padx=4, pady=(6, 0))
+        self._tcp_vel_label.pack(anchor="w", padx=4, pady=(4, 0))
         self._tcp_vel_slider = ctk.CTkSlider(
             vel,
             from_=JOG_VEL_MIN_MPS * 1000.0,
@@ -323,8 +327,9 @@ class PendantGui:
             vel,
             text=f"Rx/Ry/Rz jog  {JOG_ROT_DEG_S:.0f} deg/s",
             anchor="w",
+            height=22,
         )
-        self._rpy_vel_label.pack(anchor="w", padx=4, pady=(6, 0))
+        self._rpy_vel_label.pack(anchor="w", padx=4, pady=(4, 0))
         self._rpy_vel_slider = ctk.CTkSlider(
             vel,
             from_=JOG_ROT_MIN_DEG_S,
@@ -336,35 +341,16 @@ class PendantGui:
         self._rpy_vel_slider.pack(fill="x", padx=4, pady=(4, 6))
         self._ctrl.set_rpy_jog_deg_s(JOG_ROT_DEG_S)
 
-        # --- 맨 아래 버튼 줄: HOME, 초기자세, 정지, 비상 정지, 경로 표시, 실기 연결 ---
-        bar.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
-        body.pack(side="top", fill="both", expand=True, padx=12, pady=(2, 4))
-        ctk.CTkButton(bar, text="HOME", width=80, command=self._ctrl.home).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(bar, text="초기자세", width=90, command=self._goto_init_pose).pack(
-            side="left", padx=(0, 8)
-        )
-        ctk.CTkButton(bar, text="Stop", width=80, command=self._ctrl.stop_all).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            bar,
-            text="E-stop",
-            width=90,
-            fg_color="#b91c1c",
-            hover_color="#991b1b",
-            command=self._ctrl.estop,
-        ).pack(side="left", padx=(0, 8))
-        self.connect_btn = ctk.CTkButton(bar, text="Connect", width=110, command=self._toggle_connect)
-        self.connect_btn.pack(side="right")
-        self._trail_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            bar,
-            text="TCP 경로",
-            variable=self._trail_var,
-            command=self._on_trail_toggle,
-            width=90,
-        ).pack(side="left", padx=(8, 0))
+        body.pack(side="top", fill="both", expand=True, padx=12, pady=(4, 10))
+        self._build_top_buttons(self._top_btns)
 
         # 조그 버튼 밖에서 마우스를 떼도 조그가 멈추게 한다.
         self.root.bind_all("<ButtonRelease-1>", self._on_global_release, add="+")
+        # 비상 단축키: 창 어디에 초점이 있어도 동작한다 (입력 칸에서도).
+        self.root.bind_all("<space>", self._on_key_stop)
+        self.root.bind_all("<Escape>", self._on_key_estop)
+        # 입력 칸은 자기 처리 (공백 입력) 가 먼저라서, 그 단계에서 가로채 공백을 막는다.
+        self.root.bind_class("Entry", "<space>", self._on_key_stop)
         self._mount_grasp_panel()
         self._fill_joints()
         self._fill_ee()
@@ -372,8 +358,43 @@ class PendantGui:
         self.root.after(80, self._align_joint_goto_row)
         self.root.bind("<Map>", lambda _e: self.root.after(50, self._align_joint_goto_row), add="+")
 
+    def _build_top_buttons(self, parent: ctk.CTkFrame) -> None:
+        """위 오른쪽 큰 버튼: [Stop][E-stop][Connect] / [HOME][초기자세][TCP 경로]."""
+        big = {"width": 150, "height": 44, "font": ui_font(16, "bold")}
+        ctk.CTkButton(parent, text="Stop (Space)", command=self._ctrl.stop_all, **big).grid(
+            row=0, column=0, padx=4, pady=4
+        )
+        ctk.CTkButton(
+            parent,
+            text="E-stop (Esc)",
+            fg_color="#b91c1c",
+            hover_color="#991b1b",
+            command=self._ctrl.estop,
+            **big,
+        ).grid(row=0, column=1, padx=4, pady=4)
+        self.connect_btn = ctk.CTkButton(parent, text="Connect", command=self._toggle_connect, **big)
+        self.connect_btn.grid(row=0, column=2, padx=4, pady=4)
+        ctk.CTkButton(parent, text="HOME", command=self._ctrl.home, **big).grid(
+            row=1, column=0, padx=4, pady=4
+        )
+        ctk.CTkButton(parent, text="초기자세", command=self._goto_init_pose, **big).grid(
+            row=1, column=1, padx=4, pady=4
+        )
+        # 오른쪽 아래 칸: Meshcat 표시 체크 두 개를 위아래로.
+        view = ctk.CTkFrame(parent, fg_color="transparent")
+        view.grid(row=1, column=2, padx=(14, 4), pady=0, sticky="w")
+        check = {"font": ui_font(14, "bold"), "checkbox_width": 20, "checkbox_height": 20, "height": 24}
+        self._trail_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            view, text="TCP 경로", variable=self._trail_var, command=self._on_trail_toggle, **check
+        ).pack(anchor="w")
+        self._color_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            view, text="링크 색 구분", variable=self._color_var, command=self._on_color_toggle, **check
+        ).pack(anchor="w")
+
     def _mount_grasp_panel(self) -> None:
-        """오른쪽 두 칸에 사물 위치 패널 (teach_grasp) 을 붙인다. 실패하면 안내 글자만."""
+        """아래 두 칸에 사물 위치 패널 (teach_grasp) 을 붙인다. 실패하면 안내 글자만."""
         from teach_grasp import attach_teach_panel
 
         self._teach = attach_teach_panel(
@@ -423,7 +444,7 @@ class PendantGui:
     ) -> None:
         """TCP 한 축 줄: [이름, 현재값, −, +, 목표 입력칸, 단위]. axis 는 컨트롤러 조그 축 이름."""
         row = ctk.CTkFrame(parent)
-        row.pack(fill="x", pady=3, padx=6)
+        row.pack(fill="x", pady=4, padx=6)
         label_kw: dict = {"text": title, "width": 36, "anchor": "w"}
         if color is not None:
             label_kw["text_color"] = color
@@ -470,7 +491,7 @@ class PendantGui:
             text=text,
             width=px,
             height=32,
-            corner_radius=8,
+            corner_radius=6,
             font=ui_font(16 if width <= 4 else 13),
         )
         # _on_global_release 가 조그 버튼인지 알아보는 표시.
@@ -478,6 +499,16 @@ class PendantGui:
         btn.pack(side="left", padx=2)
         btn.bind("<ButtonPress-1>", lambda _e: on_press())
         btn.bind("<ButtonRelease-1>", lambda _e: on_release())
+
+    def _on_key_stop(self, _event=None) -> str:
+        """Space: 모든 동작 멈춤 (토크는 유지). 입력 칸에 공백이 들어가지 않게 막는다."""
+        self._ctrl.stop_all()
+        return "break"
+
+    def _on_key_estop(self, _event=None) -> str:
+        """Esc: 비상 정지 (토크 끔 — 팔이 힘을 잃는다)."""
+        self._ctrl.estop()
+        return "break"
 
     def _on_global_release(self, event: tk.Event) -> None:
         """창 어디서든 마우스를 떼면 호출. 조그 버튼 위가 아니면 조그를 멈춘다."""
@@ -600,6 +631,10 @@ class PendantGui:
         self._ctrl.set_speed_pct(pct)
         self._speed_label.configure(text=self._speed_label_text(pct))
 
+    def _on_color_toggle(self) -> None:
+        """「링크 색 구분」 체크: 켜면 링크마다 다른 색, 끄면 로봇 전체 회색."""
+        self._viz.set_robot_colorful(bool(self._color_var.get()))
+
     def _on_trail_toggle(self) -> None:
         """「TCP 경로」 체크: Meshcat 에 TCP 지나간 선을 그릴지."""
         self._viz.set_tcp_trail_enabled(bool(self._trail_var.get()))
@@ -608,14 +643,12 @@ class PendantGui:
         """XYZ 조그 기준 전환: base (로봇 베이스 축) / TCP (그리퍼 축)."""
         frame = ROT_FRAME_TCP if str(value).upper() == "TCP" else ROT_FRAME_BASE
         self._ctrl.set_xyz_frame(frame)
-        self._update_frame_label(frame, self._ctrl.rot_frame())
 
     def _on_rot_frame(self, value: str) -> None:
         """Rx/Ry/Rz 조그 기준 전환: base / TCP."""
         frame = ROT_FRAME_TCP if str(value).upper() == "TCP" else ROT_FRAME_BASE
         self._ctrl.set_rot_frame(frame)
         self._apply_rpy_label_colors(frame)
-        self._update_frame_label(self._ctrl.xyz_frame(), frame)
 
     def _rpy_colors(self, frame: str) -> dict[str, str]:
         return _RPY_COLOR
@@ -624,17 +657,6 @@ class PendantGui:
         colors = self._rpy_colors(frame)
         for title, lab in self._rpy_jog_labels.items():
             lab.configure(text_color=colors[title])
-
-    def _frame_text(self, frame: str) -> str:
-        if frame == ROT_FRAME_TCP:
-            return "TCP (그리퍼 로컬 X/Y/Z)"
-        return "base (+X forward)"
-
-    def _update_frame_label(self, xyz_frame: str, rot_frame: str) -> None:
-        _set_text(
-            self.rot_frame_label,
-            f"xyz: {self._frame_text(xyz_frame)} · rot: {self._frame_text(rot_frame)}",
-        )
 
     def _toggle_connect(self) -> None:
         """Connect / Disconnect 버튼. 연결하면 입력칸을 실기 값으로 채운다."""
@@ -693,7 +715,6 @@ class PendantGui:
             if self.connect_btn.cget("state") != "disabled":
                 _set_text(self.connect_btn, "Connect")
         # 기준 좌표 버튼이 컨트롤러 상태와 다르면 상태에 맞춘다.
-        self._update_frame_label(st.xyz_frame, st.rot_frame)
         xyz_val = "TCP" if st.xyz_frame == ROT_FRAME_TCP else "base"
         if self._xyz_frame_seg.get() != xyz_val:
             self._xyz_frame_seg.set(xyz_val)

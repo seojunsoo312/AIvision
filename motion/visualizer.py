@@ -19,6 +19,7 @@ from pathlib import Path
 import meshcat.geometry as g
 import meshcat.visualizer as meshcat_visualizer
 import numpy as np
+import pinocchio as pin
 from pinocchio.visualize import MeshcatVisualizer
 
 from motion.base_frame import T_urdf_from_user_matrix
@@ -40,14 +41,25 @@ OVERLAY_ROOT = "teach"
 TCP_TRAIL_SEC = 10.0
 TCP_TRAIL_MIN_M = 0.001  # 1 mm
 TCP_TRAIL_COLOR = 0xFB923C
+# 링크 색 구분을 끄면 로봇 전체를 이 색 (RGBA 0~1) 으로 칠한다.
+ROBOT_GRAY_RGBA = (0.70, 0.71, 0.73, 1.0)
 # 기본 /Axes 를 다시 숨기는 주기. 매 프레임 하면 display 가 5ms 더 걸린다.
 AXES_REHIDE_S = 2.0
 
 # meshcat.geometry.triad 와 같은 RGB (X 빨강, Y 초록, Z 파랑).
 _AXIS_COLORS = (0xE53935, 0x43A047, 0x1E88E8)
 # 원기둥 축 (Three.js Cylinder = +Y). 두께는 미터.
-_AXIS_RADIUS_M = 0.0018
-_AXIS_RADIUS_BASE_M = 0.0022
+# 기본 두께 = 축 길이 × _AXIS_RADIUS_FRAC, [_AXIS_RADIUS_MIN_M, _AXIS_RADIUS_MAX_M] 로 자른다.
+_AXIS_RADIUS_FRAC = 0.035
+_AXIS_RADIUS_MIN_M = 0.0005
+_AXIS_RADIUS_MAX_M = 0.0015
+_AXIS_RADIUS_BASE_M = 0.0015
+# 축 끝 원뿔 화살표: 반지름 = 길이 × _TIP_RADIUS_FRAC (축 두께의 _TIP_RADIUS_MAX_X 배 이하),
+# 길이 = 반지름 × _TIP_LEN_X (축 길이의 _TIP_LEN_MAX_FRAC 이하).
+_TIP_RADIUS_FRAC = 0.07
+_TIP_RADIUS_MAX_X = 4.0
+_TIP_LEN_X = 3.0
+_TIP_LEN_MAX_FRAC = 0.25
 
 # XY 단위 상자 안의 획 글자 (±0.5 정규화). 나중에 크기를 맞춘다.
 _GLYPHS: dict[str, tuple[tuple[float, float, float, float], ...]] = {
@@ -102,18 +114,16 @@ def _robot_view_matrix() -> np.ndarray:
     return T
 
 
-def _cylinder_axis_T(axis: int, length: float) -> np.ndarray:
-    """Three.js CylinderGeometry 는 +Y 방향, 가운데 기준. 원점에서 +X/+Y/+Z 로 옮긴다."""
+def _cylinder_axis_T(axis: int, length: float, start: float = 0.0) -> np.ndarray:
+    """Three.js CylinderGeometry 는 +Y 방향, 가운데 기준. 축 위 start 에서 +X/+Y/+Z 로 length 만큼."""
     L = float(length)
+    c = float(start) + L / 2.0
     T = np.eye(4)
-    if axis == 0:  # +Y → +X : Rz(-90°), +X 로 L/2 이동
+    if axis == 0:  # +Y → +X : Rz(-90°)
         T[:3, :3] = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-        T[0, 3] = L / 2.0
-    elif axis == 1:  # 이미 +Y
-        T[1, 3] = L / 2.0
-    else:  # +Y → +Z : Rx(+90°), +Z 로 L/2 이동
+    elif axis == 2:  # +Y → +Z : Rx(+90°)
         T[:3, :3] = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
-        T[2, 3] = L / 2.0
+    T[axis, 3] = c
     return T
 
 
@@ -131,7 +141,7 @@ def _axis_label_transform(axis: int, scale: float, letter_size: float) -> np.nda
 
 
 def _meshcat_viewer_root(title: str) -> str:
-    """meshcat 뷰어 dist 를 복사하고 HTML <title> 을 바꾼다."""
+    """meshcat 뷰어 dist 를 복사하고 HTML <title> 을 바꾸고 번역을 끈다."""
     import meshcat
 
     src = Path(meshcat.__file__).resolve().parent / "viewer" / "dist"
@@ -142,6 +152,9 @@ def _meshcat_viewer_root(title: str) -> str:
         if path.name == "index.html":
             text = path.read_text(encoding="utf-8")
             text = text.replace("<title>MeshCat</title>", f"<title>{html.escape(title)}</title>", 1)
+            # Chrome 번역 팝업 (English/Korean) 이 화면을 가리지 않게 번역 안 함 표시.
+            text = text.replace("<html>", '<html lang="ko" translate="no">', 1)
+            text = text.replace("<meta charset=utf-8>", '<meta charset=utf-8>\n\t\t<meta name="google" content="notranslate">', 1)
             target.write_text(text, encoding="utf-8")
         elif path.is_file():
             # 심볼릭 링크 말고 복사: tornado 6.5 이상은 루트 밖을 가리키는 링크에 403 을 준다.
@@ -271,6 +284,7 @@ class Visualizer:
         # TCP 축 (L6 / wrist_roll 에 고정, 움직이는 집게가 아님).
         self._viz.displayFrames(True, frame_ids=[kinematics.ee_frame_id], axis_length=0.06)
         self._set_initial_camera()
+        self._set_scene_panel_defaults()
         self._align_floor_axes()
         self._mark_origin()
         # Project-base triad (thick cylinders; Meshcat 기본 /Axes 는 숨김).
@@ -296,6 +310,20 @@ class Visualizer:
         vis = self._viz.viewer
         vis["/Cameras/default"].set_transform(np.eye(4))
         vis["/Cameras/default/rotated/<object>"].set_property("position", list(CAM_POSITION))
+
+    def set_robot_colorful(self, on: bool) -> None:
+        """on: URDF 링크마다 다른 색 (모터·링크 구별). off: 로봇 전체 회색."""
+        vis = self._viz.viewer
+        for obj in self._viz.visual_model.geometryObjects:
+            path = self._viz.getViewerNodeName(obj, pin.GeometryType.VISUAL)
+            rgba = [float(c) for c in obj.meshColor] if on else list(ROBOT_GRAY_RGBA)
+            vis[path].set_property("color", rgba)
+
+    def _set_scene_panel_defaults(self) -> None:
+        """Meshcat 오른쪽 위 Scene 패널: Background 끔 (흰 바탕), Cameras 끔."""
+        vis = self._viz.viewer
+        vis["/Background"].set_property("visible", False)
+        vis["/Cameras"].set_property("visible", False)
 
     def _align_floor_axes(self) -> None:
         """Meshcat 기본 얇은 `/Axes` 제거·숨김 (두꺼운 overlay base 만 사용)."""
@@ -352,23 +380,34 @@ class Visualizer:
         tag: str | None = None,
         radius_m: float | None = None,
     ) -> None:
-        """굵은 원기둥 RGB 좌표축. labels → 끝에 X/Y/Z 글자 (기본은 끔)."""
+        """원기둥 RGB 좌표축 + 끝 원뿔 화살표. labels → 끝에 X/Y/Z 글자 (기본은 끔)."""
         root = self._overlay(name)
         root.set_transform(np.asarray(T, dtype=float))
-        for child in ("axes", "ax_X", "ax_Y", "ax_Z", "label_X", "label_Y", "label_Z", "tag"):
+        for child in (
+            "axes", "ax_X", "ax_Y", "ax_Z", "tip_X", "tip_Y", "tip_Z",
+            "label_X", "label_Y", "label_Z", "tag",
+        ):
             try:
                 root[child].delete()
             except Exception:
                 pass
-        rad = float(_AXIS_RADIUS_M if radius_m is None else radius_m)
         length = float(scale)
+        if radius_m is None:
+            rad = min(_AXIS_RADIUS_MAX_M, max(_AXIS_RADIUS_MIN_M, _AXIS_RADIUS_FRAC * length))
+        else:
+            rad = float(radius_m)
+        tip_r = min(_TIP_RADIUS_FRAC * length, _TIP_RADIUS_MAX_X * rad)
+        tip_len = min(_TIP_LEN_X * tip_r, _TIP_LEN_MAX_FRAC * length)
+        shaft = length - tip_len
         for axis, letter, color in zip((0, 1, 2), ("X", "Y", "Z"), _AXIS_COLORS, strict=True):
+            mat = g.MeshLambertMaterial(color=int(color), reflectivity=0.15)
             node = root[f"ax_{letter}"]
-            node.set_object(
-                g.Cylinder(length, rad),
-                g.MeshLambertMaterial(color=int(color), reflectivity=0.15),
-            )
-            node.set_transform(_cylinder_axis_T(axis, length))
+            node.set_object(g.Cylinder(shaft, rad), mat)
+            node.set_transform(_cylinder_axis_T(axis, shaft))
+            # 원뿔: 위 (+Y) 반지름 0 → 축 방향 끝이 뾰족하다.
+            tip = root[f"tip_{letter}"]
+            tip.set_object(g.Cylinder(tip_len, radiusTop=0.0, radiusBottom=tip_r), mat)
+            tip.set_transform(_cylinder_axis_T(axis, tip_len, start=shaft))
         if labels:
             letter_size = max(0.008, 0.28 * float(scale))
             for axis, letter, color in zip((0, 1, 2), ("X", "Y", "Z"), _AXIS_COLORS, strict=True):
