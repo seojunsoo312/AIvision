@@ -77,6 +77,17 @@ PRE_TCP_MATCH_POS_MM = 1.5
 APPROACH_PRE_COLOR = 0xFB923C
 APPROACH_PRE_MATCH_COLOR = 0x22C55E
 APPROACH_OTHER_COLOR = 0xC2410C
+# Meshcat 의 놓기 위치 표시: 바닥 위 보라색 구 (반지름 m, 중심 높이 m).
+DROP_MARKER_COLOR = 0xA855F7
+DROP_MARKER_RADIUS_M = 0.008
+DROP_MARKER_Z_M = 0.008
+# 입력 칸 이름 (입력 오류 문구에 쓴다).
+_ENTRY_LABELS = {
+    "place_x": "사물 x", "place_y": "사물 y", "place_z": "사물 z",
+    "place_roll": "사물 Rx", "place_pitch": "사물 Ry", "place_yaw": "사물 Rz",
+    "approach_d": "d mm (대기)", "approach_a": "a mm (집기)",
+    "drop_x": "놓기 x", "drop_y": "놓기 y",
+}
 DISPLAY_MS = 33
 RPY_SLIDER_MIN = -180.0
 RPY_SLIDER_MAX = 180.0
@@ -365,6 +376,9 @@ class TeachGraspGui:
         self.entries["approach_d"].bind("<Return>", lambda _e: self._schedule_live_apply())
         self.entries["approach_a"].bind("<FocusOut>", lambda _e: self._schedule_live_apply())
         self.entries["approach_a"].bind("<Return>", lambda _e: self._schedule_live_apply())
+        for key in ("drop_x", "drop_y"):
+            self.entries[key].bind("<FocusOut>", lambda _e: self._draw_drop_marker())
+            self.entries[key].bind("<Return>", lambda _e: self._draw_drop_marker())
 
         # 상태 글자는 두 줄 자리를 미리 잡고 칸 너비에서 줄바꿈한다.
         # 한 줄로 두면 긴 글자가 칸을 오른쪽으로 늘려 버튼까지 같이 길어진다.
@@ -700,7 +714,12 @@ class TeachGraspGui:
         self._status.configure(text=text, text_color=color)
 
     def _read_float(self, key: str) -> float:
-        return float(self.entries[key].get().strip())
+        text = self.entries[key].get().strip()
+        try:
+            return float(text)
+        except ValueError:
+            name = _ENTRY_LABELS.get(key, key)
+            raise ValueError(f"{name} 칸에 숫자를 넣으세요 (지금: '{text}')") from None
 
     def _read_place_grasp(self) -> tuple[PlacePose, GraspSpec]:
         place = PlacePose(
@@ -961,8 +980,23 @@ class TeachGraspGui:
                 radius_m=APPROACH_MARKER_RADIUS_M,
                 color=0x22C55E,
             )
+        self._draw_drop_marker()
         if self._own_robot:
             self._show_robot(grasp.gripper)
+
+    def _draw_drop_marker(self) -> None:
+        """놓기 x/y 위치를 Meshcat 바닥에 보라색 구로 보인다. 숫자가 아니면 지운다."""
+        try:
+            dx, dy = self._read_float("drop_x"), self._read_float("drop_y")
+        except (KeyError, ValueError):
+            self._viz.clear_overlay("drop_marker")
+            return
+        T = np.eye(4)
+        T[:3, 3] = [dx / 1000.0, dy / 1000.0, 0.0]
+        center = _T_meshcat(T)[:3, 3] + np.array([0.0, 0.0, DROP_MARKER_Z_M])
+        self._viz.set_overlay_spheres(
+            "drop_marker", center.reshape(1, 3), radius_m=DROP_MARKER_RADIUS_M, color=DROP_MARKER_COLOR
+        )
 
     def _set_collision_warn(self, text: str) -> None:
         if self._warn_label is not None:

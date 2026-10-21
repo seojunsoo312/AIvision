@@ -328,20 +328,20 @@ arm.moveL([0.2, 0.0, 0.08], "abs")
 ```python
 # (에러케이스) 팔이 닿지 않는 절대 좌표.
 arm.moveL([800, 0, 100], "abs")
-# ArmError: IK 실패 (... mm) 또는 go-to leftover / go-to blocked
+# ArmError: IK 실패 (... mm) 또는 목표까지 ... mm 남음 / 이동 막힘
 ```
 
 ```python
 # (에러케이스) 상대 이동을 절대 좌표처럼 사용. 지금 위치에 200, 0, 80을 더한다.
 arm.moveL([200, 0, 80], "rel")
-# 작업 공간 밖이면 ArmError: IK 실패 또는 go-to blocked
+# 작업 공간 밖이면 ArmError: IK 실패 또는 이동 막힘
 ```
 
 ```python
 # (에러케이스) rpy를 지금 자세에 더하는 변위로 사용.
 # 지금 yaw가 90이면 목표는 100이 아니라 10이다. 자세 변화가 크면 도달에 실패한다.
 arm.moveL([0, 0, 0], "rel", rpy=[0, 0, 10])
-# ArmError: IK 실패 또는 go-to leftover
+# ArmError: IK 실패 또는 목표까지 ... mm 남음
 ```
 
 ```python

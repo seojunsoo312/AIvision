@@ -53,6 +53,8 @@ DEFAULT_SPEED_PCT = 50.0
 SPEED_SCALE_AT_MIN = 0.40
 SPEED_SCALE_AT_MAX = 1.50
 SPEED_PRESETS = (("느림", 10.0), ("보통", 50.0), ("빠름", 100.0))
+# 관절 go-to 목표에 이미 있을 때의 fault 문구. 오류가 아니다 (러너·Arm 은 성공으로 본다).
+ALREADY_AT_TARGET = "이미 목표 관절에 있음"
 MAX_TARGET_LEAD_M = 0.012  # 명령 TCP 와 실측 TCP 차이 12 mm 까지 (실기). 1틱보다 작은 목표는 STS3215 가 움직이지 않는다.
 # q_send = (1-β) q_prev + β q_ik. β 가 작을수록 덜 떨리지만 더 늦게 따라간다.
 CART_IK_BLEND = 0.28
@@ -363,7 +365,7 @@ class Controller:
             self._fault = ""
             self._hw_hold = False
 
-    def estop(self, reason: str = "E-stop — torque off") -> None:
+    def estop(self, reason: str = "E-stop — 토크 꺼짐") -> None:
         with self._lock:
             self._interrupt_id += 1
             self._clear_motion_unlocked()
@@ -446,7 +448,7 @@ class Controller:
             q0 = self._q.copy()
             if float(np.max(np.abs(q1 - q0))) < 1e-6:
                 self._goto = None
-                self._fault = "already at joint target"
+                self._fault = ALREADY_AT_TARGET
                 return 0.0
             if duration_s is None:
                 duration_s = self._joint_goto_duration_unlocked(q0, q1)
@@ -782,7 +784,7 @@ class Controller:
         lifting = float(pose.xyz_m[2]) >= z_now + 1e-4
         if entering and not (allow_lift_escape and lifting):
             with self._lock:
-                self._fault = "collision — step ignored"
+                self._fault = "충돌 — 이번 조그는 무시"
                 if rewind_cart:
                     self._reset_cart_targets()
             return False
@@ -904,7 +906,7 @@ class Controller:
                     return
                 self._goto = None
                 if not self._fault:
-                    self._fault = "go-to blocked"
+                    self._fault = "이동 막힘 (경로가 충돌함)"
                 return
             if kind == "ee":
                 is_last = len(queue) == 0
@@ -932,7 +934,7 @@ class Controller:
                     self._fault = ""
                 elif i >= max_i:
                     self._goto = None
-                    self._fault = f"go-to leftover {err_mm:.1f} mm"
+                    self._fault = f"목표까지 {err_mm:.1f} mm 남음 (도달 못함)"
                 else:
                     self._goto["i"] = i
                 return

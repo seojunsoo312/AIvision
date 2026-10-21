@@ -7,6 +7,7 @@ import time
 import numpy as np
 
 from motion.controller import (
+    ALREADY_AT_TARGET,
     DEFAULT_SPEED_PCT,
     FPS,
     GOTO_MAX_S,
@@ -32,7 +33,7 @@ from motion.robot_kinematics import (
 )
 
 # 관절 go-to 가 이미 목표에 있을 때 컨트롤러가 내는 문구. 실패가 아니라 성공으로 본다.
-_ALREADY = "already at joint target"
+_ALREADY = ALREADY_AT_TARGET
 _MODES = ("virtual", "real")
 _MOVE_MODES = ("abs", "rel")
 # moveL 직선 속도 기본값과 범위 (mm/s). 범위는 컨트롤러 조그 한계와 같다.

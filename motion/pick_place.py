@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from motion.controller import Controller
+from motion.controller import ALREADY_AT_TARGET, Controller
 from motion.hw_controller import grip_100_to_user
 from motion.robot_kinematics import (
     GRIPPER_JOINT,
@@ -29,7 +29,7 @@ GRIPPER_CLOSE_100 = 0.0
 # 스텝과 스텝 사이 대기 (초). 0 이면 바로 다음.
 STEP_PAUSE_S = 1.0
 # 관절 go-to 가 이미 도착해 있으면 이 문구를 낸다 — 성공으로 본다.
-_ALREADY = "already at joint target"
+_ALREADY = ALREADY_AT_TARGET
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ class PickPlaceRunner:
             dur = self.ctrl.start_joint_goto(dict(step.joints_deg or INIT_POSE_JOINTS_DEG))
         else:
             self._phase = "fault"
-            self.status = f"unknown step {step.kind}"
+            self.status = f"알 수 없는 단계 {step.kind}"
             return False
         self._interrupt = int(self.ctrl.interrupt_id())
         st = self.ctrl.snapshot()

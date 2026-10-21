@@ -35,6 +35,7 @@ import numpy as np
 apply_ui_theme()
 
 from motion.controller import (
+    ALREADY_AT_TARGET,
     DEFAULT_SPEED_PCT,
     JOG_ROT_DEG_S,
     JOG_ROT_MAX_DEG_S,
@@ -558,7 +559,7 @@ class PendantGui:
                 raw = float(self.joint_entries[name].get())
                 target[name] = grip_100_to_user(raw) if name == GRIPPER_JOINT else raw
         except ValueError:
-            messagebox.showerror("Go-to", "Joint values must be numbers.")
+            messagebox.showerror("관절 이동", "관절 값은 숫자로 넣으세요.")
             return
         self._ctrl.start_joint_goto(target)
 
@@ -585,7 +586,7 @@ class PendantGui:
                 dtype=float,
             )
         except ValueError:
-            messagebox.showerror("Go-to", "TCP values must be numbers.")
+            messagebox.showerror("TCP 이동", "TCP 값은 숫자로 넣으세요.")
             return
         self._ctrl.start_ee_goto(xyz, rpy)
 
@@ -722,7 +723,8 @@ class PendantGui:
         if self._rot_frame_seg.get() != seg_val:
             self._rot_frame_seg.set(seg_val)
             self._apply_rpy_label_colors(st.rot_frame)
-        _set_text(self.fault_label, st.fault)
+        # "이미 목표 관절에 있음" 은 오류가 아니라서 빨간 글자로 보이지 않는다.
+        _set_text(self.fault_label, "" if st.fault == ALREADY_AT_TARGET else st.fault)
         for name, deg in st.joints_deg.items():
             shown = self._joint_display(name, deg)
             unit = "" if name == GRIPPER_JOINT else "°"
