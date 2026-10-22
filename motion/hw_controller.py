@@ -110,14 +110,14 @@ class Hardware:
         print(f"calibration {robot.calibration_fpath}")
         if not robot.calibration:
             raise RuntimeError(
-                f"No calibration at {robot.calibration_fpath}. "
-                "Run lerobot-calibrate (same path) or pass --calibration-dir."
+                f"팔 캘리브 파일이 없습니다: {robot.calibration_fpath}\n"
+                "먼저 캘리브를 하세요: bash ~/AIvision/deploy/calibrate_arms.sh follower"
             )
         missing = [
             LEROBOT_FROM_URDF[n] for n in URDF_JOINT_NAMES if LEROBOT_FROM_URDF[n] not in robot.calibration
         ]
         if missing:
-            raise RuntimeError(f"Calibration missing motors {missing}")
+            raise RuntimeError(f"캘리브 파일에 모터가 빠져 있습니다: {missing}. 캘리브를 다시 하세요.")
 
         try:
             robot.connect(calibrate=False)
@@ -190,7 +190,7 @@ class Hardware:
         """
         robot = self._robot
         if robot is None:
-            raise RuntimeError("hardware not connected")
+            raise RuntimeError("실기가 연결되어 있지 않습니다")
         with self._lock:
             present = robot.bus.sync_read("Present_Position", normalize=False)
             if not self._torque:
@@ -219,7 +219,7 @@ class Hardware:
     def read_q(self, kin: RobotKinematics) -> np.ndarray:
         robot = self._robot
         if robot is None:
-            raise RuntimeError("hardware not connected")
+            raise RuntimeError("실기가 연결되어 있지 않습니다")
         with self._lock:
             obs = robot.get_observation()
         user = self._bus_to_user(obs)
@@ -228,7 +228,7 @@ class Hardware:
     def write_q(self, kin: RobotKinematics, q: np.ndarray) -> None:
         robot = self._robot
         if robot is None:
-            raise RuntimeError("hardware not connected")
+            raise RuntimeError("실기가 연결되어 있지 않습니다")
         action = self._user_to_bus(kin.joints_deg(q))
         with self._lock:
             robot.send_action(action)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 
 import numpy as np
@@ -55,6 +56,9 @@ SPEED_SCALE_AT_MAX = 1.50
 SPEED_PRESETS = (("느림", 10.0), ("보통", 50.0), ("빠름", 100.0))
 # 관절 go-to 목표에 이미 있을 때의 fault 문구. 오류가 아니다 (러너·Arm 은 성공으로 본다).
 ALREADY_AT_TARGET = "이미 목표 관절에 있음"
+# 실기 통신 (모터 읽기·쓰기) 이 이만큼 연속으로 실패해야 E-stop (토크 끔).
+# 그 전에는 동작만 멈추고 모터는 마지막 자세를 버틴다. 30Hz 기준 3회 ≈ 0.1초.
+COMM_FAIL_LIMIT = 3
 MAX_TARGET_LEAD_M = 0.012  # 명령 TCP 와 실측 TCP 차이 12 mm 까지 (실기). 1틱보다 작은 목표는 STS3215 가 움직이지 않는다.
 # q_send = (1-β) q_prev + β q_ik. β 가 작을수록 덜 떨리지만 더 늦게 따라간다.
 CART_IK_BLEND = 0.28
@@ -135,6 +139,8 @@ class Controller:
         self._ee_err_mm: float | None = None
         self._err_xyz_mm: np.ndarray | None = None
         self._hw_hold = False
+        self._comm_fail = 0  # 실기 통신 연속 실패 횟수
+        self._loop_err = ""  # 제어 루프 예외 (같은 오류를 반복해서 찍지 않게)
         self._pose_server: PoseServer | None = None
         self._jog_vel_mps = float(JOG_VEL_MPS)
         self._jog_rot_rad_s = float(JOG_ROT_RAD_S)
@@ -214,7 +220,7 @@ class Controller:
         try:
             hw.apply_torque_pcts(pcts)
         except Exception as exc:
-            raise RuntimeError(f"torque limit write failed ({exc})") from exc
+            raise RuntimeError(f"모터 힘 제한 쓰기 실패 ({exc})") from exc
 
     @staticmethod
     def _normalize_jog_frame(frame: str) -> str:
@@ -321,7 +327,7 @@ class Controller:
 
     def connect(self) -> None:
         if self._hw is None:
-            raise RuntimeError("no hardware configured")
+            raise RuntimeError("실기 설정이 없습니다 (가상 모드 전용으로 켰습니다)")
         with self._lock:
             self._clear_motion_unlocked()
             self._hw_hold = True
@@ -797,9 +803,32 @@ class Controller:
             try:
                 hw.write_q(self._kin, q)
             except Exception as exc:
-                self.estop(f"E-stop — send failed ({exc})")
+                # 모터가 못 받은 자세이므로 화면도 되돌린다.
+                with self._lock:
+                    self._q = q_now
+                    self._pose = self._kin.forward_tcp(q_now)
+                self._comm_failed("모터 쓰기", exc)
                 return False
+            self._comm_ok()
         return True
+
+    def _comm_ok(self) -> None:
+        with self._lock:
+            self._comm_fail = 0
+
+    def _comm_failed(self, what: str, exc: Exception) -> None:
+        """실기 통신 실패. COMM_FAIL_LIMIT 번 연속이면 E-stop, 그 전에는 동작만 멈춘다."""
+        with self._lock:
+            self._comm_fail += 1
+            n = self._comm_fail
+        if n >= COMM_FAIL_LIMIT:
+            self.estop(f"E-stop — {what} {n}회 연속 실패, 토크 끔 ({exc})")
+            return
+        # 중단 번호는 올리지 않는다: 올리면 실행기가 "Stop 눌림" 으로 보여 준다.
+        # 대신 fault 를 남겨 실행기·Arm 이 이 문구로 멈춘다.
+        with self._lock:
+            self._clear_motion_unlocked()
+            self._fault = f"통신 오류 — 동작 멈춤, 자세 유지 ({what} {n}/{COMM_FAIL_LIMIT}회)"
 
     def _refresh_meas(self) -> None:
         hw = self._hw
@@ -811,8 +840,9 @@ class Controller:
         try:
             q_meas = hw.read_q(self._kin)
         except Exception as exc:
-            self.estop(f"E-stop — read failed ({exc})")
+            self._comm_failed("모터 읽기", exc)
             return
+        self._comm_ok()
         pose_meas = self._kin.forward_tcp(q_meas)
         with self._lock:
             self._q_meas = q_meas
@@ -825,9 +855,23 @@ class Controller:
         dt = 1.0 / FPS
         while not self._stop.is_set():
             t0 = time.perf_counter()
-            self._step(dt)
+            try:
+                self._step(dt)
+            except Exception as exc:
+                self._on_loop_error(exc)
             elapsed = time.perf_counter() - t0
             time.sleep(max(0.0, dt - elapsed))
+
+    def _on_loop_error(self, exc: Exception) -> None:
+        """제어 루프 예외: 스레드는 계속 돌고, 동작은 멈추고, 화면에 빨간 글자로 보인다."""
+        msg = f"{type(exc).__name__}: {exc}"
+        with self._lock:
+            new = msg != self._loop_err
+            self._loop_err = msg
+            self._clear_motion_unlocked()
+            self._fault = f"제어 오류 — 동작 멈춤 ({msg})"
+        if new:  # 30Hz 로 같은 오류를 계속 찍지 않는다.
+            traceback.print_exc()
 
     def _step(self, dt: float) -> None:
         with self._lock:

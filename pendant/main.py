@@ -176,8 +176,9 @@ def main() -> None:
     # 브라우저는 펜던트 창이 뜬 뒤 그 오른쪽에 연다 (_open_meshcat_beside).
     viz = Visualizer(kin, open_browser=False)
     viz.display(q)
-    if not open_browser and viz.url:
-        print(viz.url)
+    if viz.url:
+        # 창에는 주소를 띄우지 않는다. 브라우저를 닫았으면 이 주소로 다시 연다.
+        print(f"Meshcat  {viz.url}")
 
     hw = Hardware(
         port=args.port,

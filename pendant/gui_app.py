@@ -57,6 +57,8 @@ from motion.visualizer import Visualizer
 
 # 화면 갱신 간격 (ms). 약 30 fps.
 DISPLAY_MS = 33
+# 상단 빨간 오류 글자 줄바꿈 너비 (배율 1.0 px). 오른쪽 큰 버튼 자리를 침범하지 않게.
+FAULT_WRAP_PX = 330
 
 
 def _set_text(widget, text: str) -> None:
@@ -123,12 +125,18 @@ class PendantGui:
         top_row = ctk.CTkFrame(info, fg_color="transparent")
         top_row.pack(side="top", anchor="w")
         self.mode_label = ctk.CTkLabel(top_row, text="mode: virtual", font=mono_font(), **line)
-        self.mode_label.pack(side="left")
-        ctk.CTkLabel(
-            top_row, text=f"  ·  Meshcat: {meshcat_url or 'printed URL'}", **line
-        ).pack(side="left")
-        self.fault_label = ctk.CTkLabel(top_row, text="", text_color="#f87171", **line)
-        self.fault_label.pack(side="left", padx=(12, 0))
+        self.mode_label.pack(side="left", anchor="n")
+        # 빨간 오류 글자는 정해진 너비에서 줄바꿈한다. 한 줄로 길어지면 창이 넓어져
+        # 오른쪽 Stop · E-stop 버튼이 화면 밖으로 밀린다.
+        self.fault_label = ctk.CTkLabel(
+            top_row,
+            text="",
+            text_color="#f87171",
+            anchor="nw",
+            justify="left",
+            wraplength=FAULT_WRAP_PX,
+        )
+        self.fault_label.pack(side="left", anchor="n", padx=(12, 0))
 
         self.tcp_label = ctk.CTkLabel(info, text="TCP: —", font=mono_font(14), **line)
         self.rpy_label = ctk.CTkLabel(info, text="RxRyRz: —", font=mono_font(14), **line)
@@ -673,7 +681,10 @@ class PendantGui:
             self._fill_joints()
             self._fill_ee()
         except Exception as exc:
-            messagebox.showerror("Connect", str(exc))
+            messagebox.showerror(
+                "실기 연결 실패",
+                f"{exc}\n\n확인할 것: 팔 전원, USB, /dev/so101_follower 이름 (deploy/make_serial_rules.sh), 다른 프로그램이 팔을 쓰는지.",
+            )
             self.connect_btn.configure(text="Connect")
         finally:
             self.connect_btn.configure(state="normal")
