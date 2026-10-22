@@ -52,6 +52,7 @@ from yolo.pose.depth_cloud import (
 from yolo.pose.debug.local_plane import SLICE_MM, local_pose
 from yolo.pose.instances import collect_instances, select_topmost
 from yolo.pose.register_link import read_request, write_status
+from motion import runlog  # noqa: E402
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
@@ -344,7 +345,11 @@ _OUTLIER_STD = 1.5
 _OUTLIER_NB = 20
 
 
+_log = runlog.get("camera")
+
+
 def main() -> None:
+    runlog.setup("camera")
     parser = argparse.ArgumentParser(description="YOLO box → RGB-D point ROI")
     parser.add_argument("--weights", type=Path, default=None)
     parser.add_argument("--conf", type=float, default=DETECT_CONF)
@@ -424,6 +429,7 @@ def main() -> None:
         T_bc, t_path = load_T_base_cam()
         frame_name = "base_mm"
         print(f"T_base_cam {t_path}")
+        _log.info("손눈 캘리브 %s", t_path)
 
     noise_min_diff = NOISE_MIN_DIFF_DEFAULT
     noise_max_size = NOISE_MAX_SIZE_DEFAULT
@@ -434,6 +440,7 @@ def main() -> None:
 
     device = _device()
     model = YOLO(str(weights))
+    _log.info("YOLO 가중치 %s  device=%s", weights, device)
 
     keys = "v=3D  s=save  r=plane  q=quit"
     if args.cad:
@@ -609,6 +616,12 @@ def main() -> None:
                         cad_full_done = True
                         print("CAD miss. 전체 검색은 멈춤. 처음부터는 c.")
                     if pending_req_id is not None and not tracked:
+                        _log.info(
+                            "등록 끝  성공=%s  겹침=%.3f  오차=%.2fmm",
+                            bool(nxt.get("aligned_ok", False)),
+                            float(nxt.get("fitness", 0.0) or 0.0),
+                            float(nxt.get("inlier_rmse", 0.0) or 0.0),
+                        )
                         if nxt.get("aligned_ok", False) and T_bc is not None:
                             xyz_ui, rpy_ui, _body_ui = _place_ui_xyzrpy(nxt["T"])
                             write_status(

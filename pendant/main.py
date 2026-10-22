@@ -35,6 +35,7 @@ from motion import (
     Controller,
     Hardware,
     RobotKinematics,
+    runlog,
 )
 from motion.visualizer import Visualizer
 
@@ -168,8 +169,17 @@ def _move_new_app_window(before: set[int], x: int, y: int, w: int, h: int) -> No
         d.close()
 
 
+def _report_tk_error(exc_type, exc, tb) -> None:
+    """버튼 콜백 예외: 원래처럼 터미널에 찍고, 로그 파일에도 남긴다."""
+    import traceback
+
+    traceback.print_exception(exc_type, exc, tb)
+    runlog.get("gui").error("버튼 처리 중 예외", exc_info=(exc_type, exc, tb))
+
+
 def main() -> None:
     args = parse_args()
+    log_path = runlog.setup("pendant")
     kin = RobotKinematics(args.urdf, tcp_offset=parse_tcp_offset(args.tcp_offset_mm))
     q = kin.q_home()
     open_browser = not args.no_open
@@ -179,6 +189,8 @@ def main() -> None:
     if viz.url:
         # 창에는 주소를 띄우지 않는다. 브라우저를 닫았으면 이 주소로 다시 연다.
         print(f"Meshcat  {viz.url}")
+    if log_path is not None:
+        print(f"로그     {log_path}")
 
     hw = Hardware(
         port=args.port,
@@ -192,6 +204,7 @@ def main() -> None:
     ctk.set_appearance_mode("dark")
     root = ctk.CTk()
     apply_ui_scale(root, args.scale)
+    root.report_callback_exception = _report_tk_error
     PendantGui(root, ctrl, viz, meshcat_url=viz.url or "", grasp=args.grasp)
     if open_browser and viz.url:
         root.after(400, lambda: _open_meshcat_beside(root, viz.url))

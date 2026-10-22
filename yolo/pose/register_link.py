@@ -19,6 +19,7 @@ import time
 import uuid
 from pathlib import Path
 
+from motion import runlog
 from yolo.config import RUNS_DIR
 
 REGISTER_REQUEST_JSON = RUNS_DIR / "roi" / "register_request.json"
@@ -33,6 +34,7 @@ REG_MSG_FAIL = "등록에 실패했습니다. 카메라 창을 확인해 주세�
 REG_MSG_NO_REPLY = "카메라 창이 응답하지 않습니다. 실행중인지 확인해주세요"
 # poll() 이 이 중 하나를 돌려주면 끝. 나머지는 "wait"(아직 응답 없음), "run".
 DONE_STATES = ("ok", "busy", "no_box", "fail", "timeout")
+_log = runlog.get("register")
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -70,6 +72,15 @@ def write_status(req_id: str, state: str, *, xyz=None, rpy=None) -> None:
         payload["xyz_mm"] = [float(v) for v in xyz]
         payload["rpy_deg"] = [float(v) for v in rpy]
     _write_json(REGISTER_STATUS_JSON, payload)
+    if state == "ok":
+        _log.info(
+            "요청 %s → ok  xyz=%s  rpy=%s",
+            req_id[:8],
+            [round(v, 1) for v in payload["xyz_mm"]],
+            [round(v, 1) for v in payload["rpy_deg"]],
+        )
+    elif state != "run":
+        _log.warning("요청 %s → %s", req_id[:8], state)
 
 
 # --- 요청 쪽 ---

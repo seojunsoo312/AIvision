@@ -69,6 +69,7 @@ from motion.grasp import (  # noqa: E402
     sample_random_place,
     T_to_xyzrpy,
 )
+from motion import runlog
 from motion.pick_place import PickPlaceRunner, build_pick_place_steps  # noqa: E402
 
 APPROACH_MARKER_RADIUS_M = 0.004  # 4 mm
@@ -125,6 +126,7 @@ def _load_user_pick_run():
 
 # 상태 글자 줄바꿈 너비 (배율 1.0 px). 오른쪽 아래 칸 너비에 맞춘다.
 STATUS_WRAP_PX = 400
+_log = runlog.get("teach")
 
 class TeachGraspGui:
     def __init__(
@@ -896,7 +898,9 @@ class TeachGraspGui:
         except OSError:
             self._reg_req = None
             self._set_status(REG_MSG_NO_REPLY, error=True)
+            _log.warning("물체 위치 불러오기: 요청 파일 쓰기 실패")
             return
+        _log.info("물체 위치 불러오기: 카메라 창에 등록 요청")
         self._set_status(REG_MSG_RUN, info=True)
         self._reg_after = self.root.after(REG_POLL_MS, self._poll_register)
 
@@ -911,6 +915,11 @@ class TeachGraspGui:
         if req is None:
             return
         state = req.poll()
+        if req.done:
+            if state == "ok":
+                _log.info("등록 결과 ok  xyz=%s  rpy=%s", _r1(req.xyz_mm), _r1(req.rpy_deg))
+            else:
+                _log.warning("등록 결과 %s", state)
         if state == "ok":
             place = PlacePose(xyz_mm=req.xyz_mm, rpy_deg=req.rpy_deg)
             self._fill_place(place)
@@ -1139,6 +1148,10 @@ class TeachGraspGui:
             return
         auto = self._compute_auto(place)
         self._auto_pre = auto
+        _log.info(
+            "픽앤플레이스 입력  물체 xyz=%s rpy=%s  놓기 xy=%s",
+            _r1(place.xyz_mm), _r1(place.rpy_deg), _r1(drop_xy),
+        )
         p_xyz, p_rpy = T_to_xyzrpy(auto.T_base)
         g_xyz, g_rpy = T_to_xyzrpy(auto.T_grasp_base)
         steps = build_pick_place_steps(
@@ -1200,10 +1213,13 @@ class TeachGraspGui:
             run = _load_user_pick_run()
             from motion.arm import Arm
 
+            _log.info("픽앤플레이스(유저생성) 시작")
             run(Arm.attach(self._ctrl))
         except Exception as exc:
+            _log.warning("픽앤플레이스(유저생성) 실패: %s", exc, exc_info=not isinstance(exc, RuntimeError))
             self._post_status(f"픽앤플레이스(유저생성) 실패: {exc}", error=True)
         else:
+            _log.info("픽앤플레이스(유저생성) 완료")
             self._post_status("픽앤플레이스(유저생성) 완료")
 
     def _post_status(self, text: str, *, error: bool = False) -> None:
@@ -1361,3 +1377,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _r1(values) -> list[float]:
+    """로그용: 소수 1자리 숫자 목록."""
+    return [round(float(v), 1) for v in values]

@@ -262,10 +262,27 @@ sudo hostnamectl set-hostname jetson-03         # 선택: 보드 구분용 이�
 코드를 고친 뒤 보드마다:
 
 ```bash
-cd ~/AIvision && git pull
+cd ~/AIvision && git stash && git pull
 ```
+
+- `git stash`는 학생이 고친 파일(실행한 노트북 등)을 옆으로 치워 pull 이 막히지 않게 합니다. 되살리려면 `git stash pop`.
 
 - lerobot fork를 바꾸면 `docs/requirements.txt`와 이 문서의 커밋 번호를 바꾸고, 보드마다 5번 2)를 새 번호로 다시 실행합니다.
 - `yolo/weights/`는 git에 없으므로 바꿀 때는 USB로 복사합니다.
 - 카메라 캘리브(`vision/calib_data/`)와 필터 값(`vision/orbbec_filters.json`)도 보드마다 다르므로 git에 없습니다. 필터 파일이 없으면 git의 `vision/orbbec_filters.default.json`에서 시작합니다.
 - 이 파일들이 아직 git에 들어 있던 때 받은 보드는, 그 뒤 처음 `git pull`할 때 캘리브 파일이 지워질 수 있습니다. 그 전에 `cp -r vision/calib_data ~/calib_backup`으로 옮겨 두었다가 pull 뒤에 되돌립니다.
+
+## 10. 문제가 생겼을 때 (실행 기록)
+
+펜던트, 학생 코드(`Arm`), 카메라 창은 실행할 때마다 날짜별 파일에 기록을 남깁니다.
+
+```
+~/aivision_logs/2026-10-22.log
+2026-10-22 14:03:11 [pendant] INFO    aivision.controller: Connect 성공  관절=...
+2026-10-22 14:05:40 [pendant] WARNING aivision.pick_place: 실패  단계 6/10 드롭 XY: IK 실패 (170 mm)
+```
+
+- 남는 것: 프로그램 시작(보드 이름, 코드 커밋), Connect/Disconnect, Stop/E-stop, 모든 오류 문구, 픽앤플레이스 단계와 결과, 물체 등록 요청과 결과(겹침 비율, 오차), 학생 `Arm` 명령과 실패, 처리 안 된 예외의 전체 내용.
+- 앞의 `[pendant]`, `[arm]`, `[camera]`가 어느 프로그램에서 남긴 줄인지 알려 줍니다. 펜던트를 켜면 터미널에 이 파일 경로가 찍힙니다.
+- 학생이 "팔이 멈췄어요"라고 하면 그 보드의 오늘 날짜 파일을 USB로 가져와 시각을 맞춰 봅니다. 30일 지난 파일은 자동으로 지워집니다.
+- 코드 커밋 뒤에 `+수정`이 붙어 있으면 그 보드에서 코드 파일이 고쳐진 상태입니다.

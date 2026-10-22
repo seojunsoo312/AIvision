@@ -25,6 +25,7 @@ from motion import Arm, load_pick_targets
 | `visualizer.py` | 브라우저 3D(Meshcat). 지금 팔 자세를 보여 줍니다. `Arm`과 펜던트가 같이 씁니다. |
 | `robot/SO101_6DOF.urdf` | 팔 설계도. 관절 이름, 길이, 어떤 부품 모양을 쓸지. |
 | `robot/meshes/` | 3D에 그리는 부품 파일(STL). URDF가 가리킵니다. |
+| `runlog.py` | 실행 기록. 펜던트·`Arm`·카메라 창이 `~/aivision_logs/날짜.log`에 명령, 오류, 결과를 남깁니다. |
 | `pose_server.py` | 지금 팔 끝 자세를 `http://127.0.0.1:8765/pose`로 내보냅니다. 손눈 촬영이 읽습니다. |
 | `__init__.py` | `from motion import ...` 할 때 꺼내는 목록입니다. |
 

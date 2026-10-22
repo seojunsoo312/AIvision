@@ -17,6 +17,7 @@ from motion.base_frame import (
     tcp_pose_user_from_urdf,
     xyz_user_from_urdf,
 )
+from motion import runlog
 from motion.hw_controller import Hardware
 from motion.pose_server import PoseServer
 from motion.robot_kinematics import (
@@ -59,6 +60,8 @@ ALREADY_AT_TARGET = "이미 목표 관절에 있음"
 # 실기 통신 (모터 읽기·쓰기) 이 이만큼 연속으로 실패해야 E-stop (토크 끔).
 # 그 전에는 동작만 멈추고 모터는 마지막 자세를 버틴다. 30Hz 기준 3회 ≈ 0.1초.
 COMM_FAIL_LIMIT = 3
+
+_log = runlog.get("controller")
 MAX_TARGET_LEAD_M = 0.012  # 명령 TCP 와 실측 TCP 차이 12 mm 까지 (실기). 1틱보다 작은 목표는 STS3215 가 움직이지 않는다.
 # q_send = (1-β) q_prev + β q_ik. β 가 작을수록 덜 떨리지만 더 늦게 따라간다.
 CART_IK_BLEND = 0.28
@@ -280,6 +283,7 @@ class Controller:
             return int(self._interrupt_id)
 
     def stop_all(self) -> None:
+        _log.info("Stop")
         with self._lock:
             self._interrupt_id += 1
             self._clear_motion_unlocked()
@@ -345,7 +349,9 @@ class Controller:
                 self._hw_hold = False
                 self._fault = ""
             self._apply_torque_pcts_to_hw()
-        except Exception:
+            _log.info("Connect 성공  관절=%s", _fmt_joints(self._kin.joints_deg(q)))
+        except Exception as exc:
+            _log.error("Connect 실패: %s", exc)
             with self._lock:
                 self._hw_hold = False
                 self._mode = "virtual"
@@ -356,6 +362,7 @@ class Controller:
     def disconnect(self) -> None:
         hw = self._hw
         if hw is not None and hw.is_connected:
+            _log.info("Disconnect")
             hw.disconnect()
         with self._lock:
             self._clear_motion_unlocked()
@@ -372,6 +379,7 @@ class Controller:
             self._hw_hold = False
 
     def estop(self, reason: str = "E-stop — 토크 꺼짐") -> None:
+        _log.warning("%s", reason)
         with self._lock:
             self._interrupt_id += 1
             self._clear_motion_unlocked()
@@ -853,12 +861,20 @@ class Controller:
 
     def _loop(self) -> None:
         dt = 1.0 / FPS
+        logged_fault = ""
         while not self._stop.is_set():
             t0 = time.perf_counter()
             try:
                 self._step(dt)
             except Exception as exc:
                 self._on_loop_error(exc)
+            # 오류 문구가 바뀔 때만 기록한다 (IK 실패 · 충돌 · 통신 오류 등 모두 여기로).
+            with self._lock:
+                fault = self._fault
+            if fault != logged_fault:
+                if fault and fault != ALREADY_AT_TARGET:
+                    _log.warning("fault: %s", fault)
+                logged_fault = fault
             elapsed = time.perf_counter() - t0
             time.sleep(max(0.0, dt - elapsed))
 
@@ -872,6 +888,7 @@ class Controller:
             self._fault = f"제어 오류 — 동작 멈춤 ({msg})"
         if new:  # 30Hz 로 같은 오류를 계속 찍지 않는다.
             traceback.print_exc()
+            _log.error("제어 루프 예외", exc_info=exc)
 
     def _step(self, dt: float) -> None:
         with self._lock:
@@ -1091,3 +1108,8 @@ class Controller:
         q_next = (1.0 - CART_IK_BLEND) * q + CART_IK_BLEND * q_ik
         if not self._commit(q_next, rewind_cart=True):
             return
+
+
+def _fmt_joints(joints_deg: dict[str, float]) -> str:
+    """로그용 관절 각도 한 줄 (도, 소수 1자리)."""
+    return " ".join(f"{k}={v:.1f}" for k, v in joints_deg.items())

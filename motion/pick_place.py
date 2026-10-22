@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from motion import runlog
 from motion.controller import ALREADY_AT_TARGET, Controller
 from motion.hw_controller import grip_100_to_user
 from motion.robot_kinematics import (
@@ -30,6 +31,7 @@ GRIPPER_CLOSE_100 = 0.0
 STEP_PAUSE_S = 1.0
 # 관절 go-to 가 이미 도착해 있으면 이 문구를 낸다 — 성공으로 본다.
 _ALREADY = ALREADY_AT_TARGET
+_log = runlog.get("pick_place")
 
 
 @dataclass(frozen=True)
@@ -79,7 +81,10 @@ class PickPlaceRunner:
         self._i = 0
         self._dwell_until = 0.0
         self._phase = "running"
-        return self._launch()
+        _log.info("시작  %d단계: %s", len(self._steps), " → ".join(_step_text(st) for st in self._steps))
+        ok = self._launch()
+        self._log_after(0, "idle")  # 첫 단계 (또는 바로 실패) 를 남긴다.
+        return ok
 
     def abort(self, reason: str = "중단") -> None:
         self._phase = "fault"
@@ -88,6 +93,21 @@ class PickPlaceRunner:
 
     def tick(self) -> str:
         """GUI 루프에서 부른다. idle|running|done|fault 를 돌려준다."""
+        i0, phase0 = self._i, self._phase
+        phase = self._tick()
+        self._log_after(i0, phase0)
+        return phase
+
+    def _log_after(self, i0: int, phase0: str) -> None:
+        """단계가 넘어가거나 끝·실패가 되면 한 줄 남긴다."""
+        if self._phase == "running" and (self._i != i0 or phase0 != "running"):
+            _log.info("단계 %d/%d  %s", self._i + 1, len(self._steps), self.step_name)
+        elif self._phase != phase0 and self._phase == "done":
+            _log.info("완료")
+        elif self._phase != phase0 and self._phase == "fault":
+            _log.warning("실패  단계 %d/%d %s: %s", self._i + 1, len(self._steps), self.step_name, self.status)
+
+    def _tick(self) -> str:
         if self._phase != "running":
             return self._phase
         if int(self.ctrl.interrupt_id()) != int(self._interrupt):
@@ -262,3 +282,13 @@ def build_pick_place_steps(
         ]
     )
     return steps
+
+
+def _step_text(step: PickPlaceStep) -> str:
+    """로그용 단계 한 마디: 이름과 목표 (mm 또는 그리퍼 0–100)."""
+    if step.xyz_mm is not None:
+        x, y, z = (float(v) for v in step.xyz_mm)
+        return f"{step.name}({x:.0f},{y:.0f},{z:.0f})"
+    if step.grip_100 is not None:
+        return f"{step.name}({step.grip_100:.0f})"
+    return step.name

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import time
 
 import numpy as np
@@ -22,6 +23,7 @@ from motion.controller import (
     Controller,
     speed_pct_to_joint_vel,
 )
+from motion import runlog
 from motion.hw_controller import Hardware, grip_100_to_user, grip_user_to_100
 from motion.robot_kinematics import (
     ARM_JOINT_NAMES,
@@ -34,6 +36,24 @@ from motion.robot_kinematics import (
 
 # 관절 go-to 가 이미 목표에 있을 때 컨트롤러가 내는 문구. 실패가 아니라 성공으로 본다.
 _ALREADY = ALREADY_AT_TARGET
+_log = runlog.get("arm")
+
+
+def _logged(method):
+    """학생 명령을 로그에 남긴다: 무엇을 불렀는지, 실패하면 왜."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        parts = [repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()]
+        call = f"{method.__name__}({', '.join(parts)})"
+        _log.info("%s", call)
+        try:
+            return method(self, *args, **kwargs)
+        except ArmError as exc:
+            _log.warning("%s 실패: %s", call, exc)
+            raise
+
+    return wrapper
 _MODES = ("virtual", "real")
 _MOVE_MODES = ("abs", "rel")
 # moveL 직선 속도 기본값과 범위 (mm/s). 범위는 컨트롤러 조그 한계와 같다.
@@ -64,6 +84,8 @@ class Arm:
         open_browser: False 면 Meshcat 주소만 출력하고 브라우저는 열지 않는다.
         실패하면 ArmError.
         """
+        runlog.setup("arm")
+        _log.info("Arm 시작  mode=%s", mode)
         key = str(mode).strip().lower()
         if key not in _MODES:
             raise ArmError("mode는 'virtual' 또는 'real' 이어야 합니다")
@@ -127,6 +149,7 @@ class Arm:
             "rpy_deg": [_round2(v) for v in st.pose.rpy_deg],
         }
 
+    @_logged
     def moveL(
         self, xyz, mode: str, rpy=None, speed=None, rpy_speed=None, path: str = "line"
     ) -> dict[str, list[float] | float]:
@@ -197,6 +220,7 @@ class Arm:
         self._wait_started(dur, joint=False)
         return self.where()
 
+    @_logged
     def moveJ(self, joints, mode: str, gripper=None, speed=None) -> dict[str, list[float] | float]:
         """관절 6개를 각도로 움직인다. TCP 직선 이동이 아니다. 도착할 때까지 기다린다.
 
@@ -237,6 +261,7 @@ class Arm:
         self._wait_started(dur, joint=True)
         return self.where()
 
+    @_logged
     def grip(self, value: float) -> None:
         """그리퍼만 움직인다. 0=닫힘, 100=완전히 열림. 범위 밖 값은 0–100 으로 자른다."""
         ctrl = self._require_ctrl()
@@ -247,6 +272,7 @@ class Arm:
         self._mark_motion(ctrl)
         self._wait_started(dur, joint=True)
 
+    @_logged
     def home(self) -> dict[str, list[float] | float]:
         """홈 자세 (관절각 모두 0, 위팔이 서고 아래팔이 앞을 향한 L자) 로 관절 이동."""
         ctrl = self._require_ctrl()
@@ -256,6 +282,7 @@ class Arm:
         self._wait_started(dur, joint=True)
         return self.where()
 
+    @_logged
     def initial(self) -> dict[str, list[float] | float]:
         """펜던트 초기자세로 관절 이동. 작업 시작용이며 그리퍼는 닫힌다."""
         ctrl = self._require_ctrl()
@@ -265,6 +292,7 @@ class Arm:
         self._wait_started(dur, joint=True)
         return self.where()
 
+    @_logged
     def stop(self) -> None:
         """진행 중인 이동을 멈춘다. 바로 돌아온다."""
         self._require_ctrl().stop_all()
