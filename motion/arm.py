@@ -37,6 +37,8 @@ from motion.robot_kinematics import (
 # 관절 go-to 가 이미 목표에 있을 때 컨트롤러가 내는 문구. 실패가 아니라 성공으로 본다.
 _ALREADY = ALREADY_AT_TARGET
 _log = runlog.get("arm")
+# grip(value) 가 이 값(0–100)보다 작으면 물체를 쥔 것으로 본다.
+GRIP_HOLD_BELOW_100 = 10.0
 
 
 def _logged(method):
@@ -268,6 +270,8 @@ class Arm:
         self._reject_external_stop(ctrl)
         joints = dict(ctrl.snapshot().joints_deg)
         joints[GRIPPER_JOINT] = grip_100_to_user(float(value))
+        # 거의 닫으면 물체를 쥔 것으로, 그보다 열면 놓은 것으로 본다.
+        ctrl.set_holding(float(value) < GRIP_HOLD_BELOW_100)
         dur = ctrl.start_joint_goto(joints)
         self._mark_motion(ctrl)
         self._wait_started(dur, joint=True)
@@ -277,7 +281,7 @@ class Arm:
         """홈 자세 (관절각 모두 0, 위팔이 서고 아래팔이 앞을 향한 L자) 로 관절 이동."""
         ctrl = self._require_ctrl()
         self._reject_external_stop(ctrl)
-        dur = ctrl.start_joint_goto(dict(HOME_JOINTS_DEG))
+        dur = ctrl.start_joint_goto(ctrl.keep_gripper_if_holding(HOME_JOINTS_DEG))
         self._mark_motion(ctrl)
         self._wait_started(dur, joint=True)
         return self.where()
@@ -287,7 +291,7 @@ class Arm:
         """펜던트 초기자세로 관절 이동. 작업 시작용이며 그리퍼는 닫힌다."""
         ctrl = self._require_ctrl()
         self._reject_external_stop(ctrl)
-        dur = ctrl.start_joint_goto(dict(INIT_POSE_JOINTS_DEG))
+        dur = ctrl.start_joint_goto(ctrl.keep_gripper_if_holding(INIT_POSE_JOINTS_DEG))
         self._mark_motion(ctrl)
         self._wait_started(dur, joint=True)
         return self.where()

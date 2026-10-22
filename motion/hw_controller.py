@@ -167,13 +167,18 @@ class Hardware:
         except Exception:
             pass
 
-    def disable_torque(self) -> None:
+    def disable_torque(self, *, keep_gripper: bool = False) -> None:
+        """토크 끄기. keep_gripper 면 그리퍼 모터만 힘을 유지한다 (쥔 물체가 빠지지 않게)."""
         self._torque = False
         robot = self._robot
         if robot is None:
             return
         with self._lock:
-            robot.bus.disable_torque()
+            if keep_gripper:
+                arm_motors = [m for m in robot.bus.motors if m != LEROBOT_FROM_URDF[GRIPPER_JOINT]]
+                robot.bus.disable_torque(arm_motors)
+            else:
+                robot.bus.disable_torque()
 
     def enable_torque(self) -> None:
         """지금 엔코더 자세를 유지한다. 마지막 Goal_Position 으로 토크를 켜지 않는다."""

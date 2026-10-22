@@ -29,6 +29,13 @@ GRIPPER_OPEN_100 = 30.0
 GRIPPER_CLOSE_100 = 0.0
 # 스텝과 스텝 사이 대기 (초). 0 이면 바로 다음.
 STEP_PAUSE_S = 1.0
+# 물체를 쥔 채 실패하면 그 자리 아래로 이 속도로 천천히 내려 놓는다 (m/s).
+SAFE_LOWER_MPS = 0.010
+# 내려놓은 뒤 들어 올리는 높이 (mm).
+SAFE_LIFT_MM = 30.0
+# 이 문구로 시작하는 실패는 내려놓기를 하지 않고 쥔 채 멈춘다 (통신·제어가 불안할 때 더 움직이지 않는다).
+# Stop(중단)도 사람이 멈춘 것이므로 그대로 둔다.
+_NO_RECOVER = ("통신 오류", "E-stop", "제어 오류", "중단")
 # 관절 go-to 가 이미 도착해 있으면 이 문구를 낸다 — 성공으로 본다.
 _ALREADY = ALREADY_AT_TARGET
 _log = runlog.get("pick_place")
@@ -42,6 +49,10 @@ class PickPlaceStep:
     rpy_deg: np.ndarray | None = None
     grip_100: float | None = None
     joints_deg: dict[str, float] | None = None
+    # True: 이 단계를 시작하면 "물체 쥠", False: "물체 놓음". None 이면 바꾸지 않는다.
+    hold: bool | None = None
+    # 손끝 직선 이동 속도 (m/s). None 이면 실행기 기본값.
+    lin_mps: float | None = None
 
 
 @dataclass
@@ -55,10 +66,19 @@ class PickPlaceRunner:
     _interrupt: int = 0
     _dwell_until: float = 0.0
     status: str = ""
+    # 쥔 채 실패해서 내려놓는 중이면 그 원인. 아니면 "".
+    _recover_cause: str = ""
+    # 집은 높이 (mm). 내려놓을 높이로 쓴다.
+    _place_z: float | None = None
 
     @property
     def phase(self) -> str:
         return self._phase
+
+    @property
+    def recovering(self) -> bool:
+        """쥔 채 실패해서 내려놓는 중이면 True."""
+        return bool(self._recover_cause)
 
     @property
     def step_name(self) -> str:
@@ -77,10 +97,18 @@ class PickPlaceRunner:
         if self._phase == "running":
             self.status = "이미 실행 중"
             return False
+        if self.ctrl.holding():
+            # 첫 단계에서 그리퍼를 열기 때문에, 쥔 채로 시작하면 공중에서 물체를 놓친다.
+            self._phase = "fault"
+            self.status = "물체를 쥐고 있어 시작하지 않습니다 — 먼저 내려놓으세요"
+            _log.warning("%s", self.status)
+            return False
         self._steps = list(steps)
         self._i = 0
         self._dwell_until = 0.0
         self._phase = "running"
+        self._recover_cause = ""
+        self._place_z = _grasp_z(self._steps)
         _log.info("시작  %d단계: %s", len(self._steps), " → ".join(_step_text(st) for st in self._steps))
         ok = self._launch()
         self._log_after(0, "idle")  # 첫 단계 (또는 바로 실패) 를 남긴다.
@@ -96,7 +124,46 @@ class PickPlaceRunner:
         i0, phase0 = self._i, self._phase
         phase = self._tick()
         self._log_after(i0, phase0)
+        if phase == "fault" and phase0 == "running":
+            phase = self._after_fault()
+        elif phase == "done" and self._recover_cause:
+            # 내려놓기까지 끝났다. 원래 실패이므로 fault 로 끝낸다.
+            self._phase = phase = "fault"
+            self.status = f"{self._recover_cause} → 물체를 내려놓고 멈춤"
+            _log.warning("실패 후 내려놓기 완료: %s", self._recover_cause)
+            self._recover_cause = ""
         return phase
+
+    def _after_fault(self) -> str:
+        """실패 직후. 물체를 쥐고 있으면 그 자리 아래로 내려놓기를 시작하거나, 쥔 채 멈춘다."""
+        if not self.ctrl.holding():
+            return self._phase
+        cause = self.status
+        if self._recover_cause:
+            # 내려놓기 도중에 또 실패: 더 움직이지 않고 쥔 채 멈춘다.
+            self.status = f"물체를 쥔 채 멈춤 — 손으로 받친 뒤 내려 주세요 ({self._recover_cause} / {cause})"
+            _log.warning("%s", self.status)
+            self._recover_cause = ""
+            return self._phase
+        if cause.startswith(_NO_RECOVER) or self._place_z is None:
+            self.status = f"물체를 쥔 채 멈춤 — 손으로 받친 뒤 내려 주세요 ({cause})"
+            _log.warning("%s", self.status)
+            return self._phase
+        pose = self.ctrl.snapshot().pose
+        xyz = np.asarray(pose.xyz_mm, dtype=float)
+        rpy = np.asarray(pose.rpy_deg, dtype=float)
+        steps = build_safe_putdown_steps(xyz, rpy, place_z_mm=float(self._place_z))
+        _log.warning("물체를 쥔 채 실패 (%s) → 그 자리 아래로 내려놓기", cause)
+        self._recover_cause = cause
+        self._steps = steps
+        self._i = 0
+        self._dwell_until = 0.0
+        self._phase = "running"
+        self._launch()
+        self._log_after(0, "idle")
+        if self._phase == "fault":
+            return self._after_fault()
+        return self._phase
 
     def _log_after(self, i0: int, phase0: str) -> None:
         """단계가 넘어가거나 끝·실패가 되면 한 줄 남긴다."""
@@ -147,12 +214,14 @@ class PickPlaceRunner:
     def _launch(self) -> bool:
         step = self._steps[self._i]
         self.status = step.name
+        if step.hold is not None:
+            self.ctrl.set_holding(step.hold)
         dur = 0.0
         if step.kind == "ee":
             dur = self.ctrl.start_ee_goto(
                 np.asarray(step.xyz_mm, dtype=float),
                 np.asarray(step.rpy_deg, dtype=float),
-                lin_mps=self.lin_mps,
+                lin_mps=step.lin_mps if step.lin_mps is not None else self.lin_mps,
                 rot_deg_s=self.rot_deg_s,
             )
         elif step.kind == "ee_joints":
@@ -254,8 +323,8 @@ def build_pick_place_steps(
             rpy_deg=np.asarray(rpy, dtype=float).reshape(3),
         )
 
-    def grip(name: str, val: float) -> PickPlaceStep:
-        return PickPlaceStep(name=name, kind="gripper", grip_100=float(val))
+    def grip(name: str, val: float, hold: bool | None = None) -> PickPlaceStep:
+        return PickPlaceStep(name=name, kind="gripper", grip_100=float(val), hold=hold)
 
     gx, gy = float(g_xyz[0]), float(g_xyz[1])
     dx, dy = float(drop_xy[0]), float(drop_xy[1])
@@ -263,7 +332,7 @@ def build_pick_place_steps(
         ee("P", p_xyz, p_rpy),
         grip("그리퍼 열기", open_100),
         ee("G", g_xyz, g_rpy),
-        grip("그리퍼 닫기", close_100),
+        grip("그리퍼 닫기", close_100, hold=True),
         ee("집기 리프트", np.array([gx, gy, z_lift]), g_rpy),
         ee("드롭 XY", np.array([dx, dy, z_xy]), drop_rpy, joints=True),
     ]
@@ -272,7 +341,7 @@ def build_pick_place_steps(
     steps.extend(
         [
             ee("하강", np.array([dx, dy, z_g]), drop_rpy),
-            grip("그리퍼 열기", open_100),
+            grip("그리퍼 열기", open_100, hold=False),
             ee("놓기 리프트", np.array([dx, dy, z_hi]), drop_rpy),
             PickPlaceStep(
                 name="초기자세",
@@ -292,3 +361,38 @@ def _step_text(step: PickPlaceStep) -> str:
     if step.grip_100 is not None:
         return f"{step.name}({step.grip_100:.0f})"
     return step.name
+
+
+def build_safe_putdown_steps(
+    xyz_mm: np.ndarray, rpy_deg: np.ndarray, *, place_z_mm: float
+) -> list[PickPlaceStep]:
+    """쥔 채 실패했을 때: 지금 x, y 에서 집은 높이까지 천천히 내려가 그리퍼를 열고 조금 든다.
+
+    공중에서 그리퍼를 열지 않는다. 이미 그 높이 이하면 내려가는 단계를 건너뛴다.
+    """
+    x, y, z = (float(v) for v in np.asarray(xyz_mm, dtype=float).reshape(3))
+    rpy = np.asarray(rpy_deg, dtype=float).reshape(3)
+    zp = float(place_z_mm)
+    steps: list[PickPlaceStep] = []
+    if z > zp + 1.0:
+        steps.append(
+            PickPlaceStep(
+                name="안전 하강", kind="ee", xyz_mm=np.array([x, y, zp]), rpy_deg=rpy, lin_mps=SAFE_LOWER_MPS
+            )
+        )
+    steps.append(PickPlaceStep(name="그리퍼 열기 (내려놓기)", kind="gripper", grip_100=GRIPPER_OPEN_100, hold=False))
+    steps.append(
+        PickPlaceStep(name="안전 리프트", kind="ee", xyz_mm=np.array([x, y, min(z, zp) + SAFE_LIFT_MM]), rpy_deg=rpy)
+    )
+    return steps
+
+
+def _grasp_z(steps: list[PickPlaceStep]) -> float | None:
+    """물체를 쥐는 단계 바로 앞의 손끝 이동 높이 = 집은 높이 (mm)."""
+    last_z = None
+    for st in steps:
+        if st.hold is True:
+            return last_z
+        if st.xyz_mm is not None:
+            last_z = float(np.asarray(st.xyz_mm, dtype=float)[2])
+    return None

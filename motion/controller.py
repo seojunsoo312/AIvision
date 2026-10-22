@@ -116,6 +116,7 @@ class PendantState:
     torque: bool
     ee_err_mm: float | None
     err_xyz_mm: np.ndarray | None
+    holding: bool = False  # 픽앤플레이스 · grip() 이 물체를 쥐었다고 본 상태
 
 
 class Controller:
@@ -143,6 +144,8 @@ class Controller:
         self._err_xyz_mm: np.ndarray | None = None
         self._hw_hold = False
         self._comm_fail = 0  # 실기 통신 연속 실패 횟수
+        # 물체를 쥔 상태. 쥔 동안은 버튼이 그리퍼를 열지 않는다 (공중에서 놓치지 않게).
+        self._holding = False
         self._loop_err = ""  # 제어 루프 예외 (같은 오류를 반복해서 찍지 않게)
         self._pose_server: PoseServer | None = None
         self._jog_vel_mps = float(JOG_VEL_MPS)
@@ -184,6 +187,9 @@ class Controller:
     def set_joint_jog(self, joint: str, sign: int) -> None:
         if joint not in self._joint_jog:
             raise KeyError(joint)
+        if joint == GRIPPER_JOINT and sign > 0 and self.holding():
+            # 사람이 직접 그리퍼를 여는 것 = 손으로 받치고 놓겠다는 뜻으로 본다.
+            self.set_holding(False)
         with self._lock:
             if sign != 0 and self._frozen_unlocked():
                 return
@@ -294,11 +300,34 @@ class Controller:
             return self._goto is not None
 
     def home(self) -> None:
-        self.start_joint_goto(dict(HOME_JOINTS_DEG))
+        self.start_joint_goto(self.keep_gripper_if_holding(HOME_JOINTS_DEG))
 
     def init_pose(self) -> None:
         """작업 시작 자세 (펜던트 초기자세 버튼)."""
-        self.start_joint_goto(dict(INIT_POSE_JOINTS_DEG))
+        self.start_joint_goto(self.keep_gripper_if_holding(INIT_POSE_JOINTS_DEG))
+
+    def set_holding(self, on: bool) -> None:
+        """물체를 쥐었는지 표시한다. 픽앤플레이스 실행기와 Arm.grip() 이 부른다."""
+        on = bool(on)
+        with self._lock:
+            changed = on != self._holding
+            self._holding = on
+        if changed:
+            _log.info("물체 %s", "쥠" if on else "놓음")
+
+    def holding(self) -> bool:
+        with self._lock:
+            return self._holding
+
+    def keep_gripper_if_holding(self, joints_deg: dict[str, float]) -> dict[str, float]:
+        """물체를 쥐고 있으면 목표의 그리퍼 값을 지금 값으로 바꾼다 (이동 중에 열리지 않게)."""
+        target = dict(joints_deg)
+        with self._lock:
+            holding = self._holding
+            q = self._q.copy()
+        if holding:
+            target[GRIPPER_JOINT] = float(self._kin.joints_deg(q)[GRIPPER_JOINT])
+        return target
 
     def snap_to_joints(self, joints_deg: dict[str, float]) -> bool:
         """관절을 보간 없이 목표로 즉시 설정 (가상 전용; 실기 write 경로도 타지만 호출부에서 막음)."""
@@ -325,7 +354,7 @@ class Controller:
         if connected and mode == "real":
             self.init_pose()
             return "goto"
-        if not self.snap_to_joints(dict(INIT_POSE_JOINTS_DEG)):
+        if not self.snap_to_joints(self.keep_gripper_if_holding(INIT_POSE_JOINTS_DEG)):
             return ""
         return "snap"
 
@@ -348,6 +377,7 @@ class Controller:
                 self._mode = "real"
                 self._hw_hold = False
                 self._fault = ""
+                self._holding = False
             self._apply_torque_pcts_to_hw()
             _log.info("Connect 성공  관절=%s", _fmt_joints(self._kin.joints_deg(q)))
         except Exception as exc:
@@ -386,7 +416,8 @@ class Controller:
             self._fault = reason
         if self._hw is not None and self._hw.is_connected:
             try:
-                self._hw.disable_torque()
+                # 팔 관절만 힘을 끈다. 그리퍼는 쥔 물체가 빠지지 않게 힘을 유지한다.
+                self._hw.disable_torque(keep_gripper=True)
             except Exception as exc:
                 with self._lock:
                     self._fault = f"{reason} ({exc})"
@@ -712,6 +743,7 @@ class Controller:
             rot_frame = self._rot_frame
             xyz_frame = self._xyz_frame
             err = self._ee_err_mm
+            holding = self._holding
             err_xyz = None if self._err_xyz_mm is None else xyz_user_from_urdf(self._err_xyz_mm)
         hw = self._hw
         connected = bool(hw is not None and hw.is_connected)
@@ -728,6 +760,7 @@ class Controller:
             torque=torque,
             ee_err_mm=err,
             err_xyz_mm=err_xyz,
+            holding=holding,
         )
 
     def handeye_payload(self) -> dict:

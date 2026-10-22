@@ -667,10 +667,26 @@ class PendantGui:
         for title, lab in self._rpy_jog_labels.items():
             lab.configure(text_color=colors[title])
 
+    def _confirm_release(self, action: str) -> bool:
+        """물체를 쥐고 있으면 확인을 받는다. 계속하면 그리퍼가 풀려 물체가 떨어질 수 있다."""
+        if not self._ctrl.holding():
+            return True
+        return bool(
+            messagebox.askyesno(
+                "물체를 쥐고 있습니다",
+                f"{action} 모터 힘이 꺼져 물체가 떨어질 수 있습니다.\n\n"
+                "먼저 물체를 내려놓으세요 (손으로 받친 뒤 Gripper Open).\n\n그래도 계속할까요?",
+                default=messagebox.NO,
+                icon=messagebox.WARNING,
+            )
+        )
+
     def _toggle_connect(self) -> None:
         """Connect / Disconnect 버튼. 연결하면 입력칸을 실기 값으로 채운다."""
         st = self._ctrl.snapshot()
         if st.connected:
+            if not self._confirm_release("Disconnect 하면"):
+                return
             self._ctrl.disconnect()
             self.connect_btn.configure(text="Connect")
             return
@@ -720,10 +736,10 @@ class PendantGui:
             )
         torque = "torque on" if st.torque else "torque off"
         if st.connected:
-            _set_text(self.mode_label, f"mode: real · {torque}")
+            _set_text(self.mode_label, f"mode: real · {torque}" + (" · 물체 쥠" if st.holding else ""))
             _set_text(self.connect_btn, "Disconnect")
         else:
-            _set_text(self.mode_label, "mode: virtual")
+            _set_text(self.mode_label, "mode: virtual" + (" · 물체 쥠" if st.holding else ""))
             if self.connect_btn.cget("state") != "disabled":
                 _set_text(self.connect_btn, "Connect")
         # 기준 좌표 버튼이 컨트롤러 상태와 다르면 상태에 맞춘다.
@@ -746,6 +762,8 @@ class PendantGui:
     def on_close(self) -> None:
         """창 닫기. 실기에 토크가 켜져 있으면 먼저 쉬는 자세로 옮긴 뒤 닫는다."""
         if self._closing:
+            return
+        if not self._confirm_release("창을 닫으면"):
             return
         self._closing = True
         if self._teach is not None:
