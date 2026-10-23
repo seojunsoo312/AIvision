@@ -259,18 +259,21 @@ sudo hostnamectl set-hostname jetson-03         # 선택: 보드 구분용 이�
 
 ## 9. 업데이트
 
-코드를 고친 뒤 보드마다:
+코드를 고친 뒤(강의자 보드에서 커밋 · 푸쉬) 각 보드에서 **바탕화면 「AIvision 업데이트」 아이콘을 더블클릭**합니다. 학생은 git 을 몰라도 됩니다. 아이콘이 없으면 `bash ~/AIvision/deploy/install_update_icon.sh`, 아이콘 대신 터미널에서는 `bash ~/AIvision/deploy/update_board.sh`.
 
-```bash
-cd ~/AIvision && git stash && git pull
-```
+아이콘(`deploy/update_board.sh`)이 하는 일:
 
-- `git stash`는 학생이 고친 파일(실행한 노트북 등)을 옆으로 치워 pull 이 막히지 않게 합니다. 되살리려면 `git stash pop`.
+1. 펜던트 · 카메라 창 · 노트북(Jupyter)이 켜져 있으면 멈춥니다. 먼저 닫습니다.
+2. 학생이 고친 파일(실행한 노트북 등)을 **바탕화면 `AIvision_백업/날짜_시각/`** 에 복사합니다.
+3. 저장소를 GitHub 과 똑같이 맞춥니다(`git reset --hard`). 학생이 새로 만든 파일, 캘리브, 가중치, 로그처럼 git 이 모르는 파일은 그대로 둡니다.
+4. `docs/requirements.txt` 나 `deploy/setup_jetson.sh` 가 바뀌었으면 `setup_jetson.sh` 를 다시 돌립니다 (sudo 비밀번호를 물을 수 있음).
+5. `check_board.py` 로 점검하고 `✅ 업데이트 완료 — 버전 250311f · 통과 16 · 경고 5 · 실패 0` 처럼 한 줄로 보여 줍니다. **8대의 버전 번호가 같은지** 확인합니다. 실행 기록에도 `[update]` 줄이 남습니다.
 
-- lerobot fork를 바꾸면 `docs/requirements.txt`와 이 문서의 커밋 번호를 바꾸고, 보드마다 5번 2)를 새 번호로 다시 실행합니다.
-- `yolo/weights/`는 git에 없으므로 바꿀 때는 USB로 복사합니다.
-- 카메라 캘리브(`vision/calib_data/`)와 필터 값(`vision/orbbec_filters.json`)도 보드마다 다르므로 git에 없습니다. 필터 파일이 없으면 git의 `vision/orbbec_filters.default.json`에서 시작합니다.
-- 이 파일들이 아직 git에 들어 있던 때 받은 보드는, 그 뒤 처음 `git pull`할 때 캘리브 파일이 지워질 수 있습니다. 그 전에 `cp -r vision/calib_data ~/calib_backup`으로 옮겨 두었다가 pull 뒤에 되돌립니다.
+학생에게는 이것만 알려 줍니다: "업데이트하면 실습 노트북이 처음 상태로 돌아갑니다. 내가 고친 것은 바탕화면 `AIvision_백업` 폴더에 날짜별로 남아 있습니다."
+
+- git 에 없는 것은 아이콘이 바꾸지 않습니다. `yolo/weights/best.pt` 는 USB 로 복사합니다.
+- 카메라 캘리브(`vision/calib_data/`), 필터 값(`vision/orbbec_filters.json`), 팔 캘리브는 보드마다 다르므로 git 에 없고 업데이트해도 그대로입니다.
+- 강의자 보드(개발용)에서는 아이콘을 쓰지 않습니다. 커밋하지 않은 작업이 백업 폴더로 옮겨지고 저장소가 GitHub 상태로 돌아가기 때문입니다.
 
 ## 10. 문제가 생겼을 때 (실행 기록)
 

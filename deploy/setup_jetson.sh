@@ -215,6 +215,10 @@ else:
 PYEOF
 fi
 
+# ---------------------------------------------------------------- 바탕화면 아이콘
+say "바탕화면 「AIvision 업데이트」 아이콘"
+bash "$PROJECT_DIR/deploy/install_update_icon.sh" || warn "아이콘을 만들지 못했습니다. 나중에 bash deploy/install_update_icon.sh"
+
 # ---------------------------------------------------------------- 정리
 say "캐시 정리 (복제할 SSD 용량을 줄인다)"
 "$PY" -m pip cache purge >/dev/null 2>&1 || true

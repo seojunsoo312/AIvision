@@ -75,6 +75,13 @@ def _():
     return (PASS, "있음") if not miss else (WARN, f"없음 {sorted(miss)} — 다시 로그인 필요")
 
 
+@check("바탕화면 「AIvision 업데이트」 아이콘")
+def _():
+    desk = sh("xdg-user-dir DESKTOP") or str(Path.home() / "Desktop")
+    icon = Path(desk) / "aivision-update.desktop"
+    return (PASS, str(icon)) if icon.is_file() else (WARN, "없음 — bash deploy/install_update_icon.sh")
+
+
 print("== 카메라")
 
 
