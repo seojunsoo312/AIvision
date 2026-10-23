@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko" translate="no"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate"><title>AIvision 그림으로 보기</title>
+<style>
+  :root { --bg:#f4f5f7; --fg:#1f2937; --muted:#6b7280; --line:#e5e7eb; --card:#ffffff; --accent:#0e7490; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --fg:#e5e7eb; --muted:#9ca3af; --line:#2a2f38; --card:#161a20; --accent:#22d3ee; } }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font-family:"Noto Sans CJK KR","Noto Sans KR",system-ui,sans-serif; }
+
+  main { max-width:860px; margin:0 auto; padding:32px 16px 48px; }
+  h1 { margin:0 0 6px; font-size:24px; } .sub { margin:0 0 24px; color:var(--muted); }
+  .card { display:flex; gap:16px; align-items:flex-start; padding:16px 18px; margin-bottom:12px; background:var(--card);
+    border:1px solid var(--line); border-radius:12px; color:inherit; text-decoration:none; }
+  .card:hover { border-color:var(--accent); }
+  .no { flex:none; width:28px; height:28px; border-radius:50%; background:var(--accent); color:var(--card);
+    display:grid; place-items:center; font-weight:700; font-size:14px; }
+  .card h2 { margin:2px 0 4px; font-size:17px; } .card p { margin:0; color:var(--muted); font-size:14px; line-height:1.5; }
+  .other { margin-top:24px; font-size:13px; color:var(--muted); } .other a { color:var(--accent); }
+</style></head><body><main>
+  <h1>AIvision 그림으로 보기</h1><p class="sub">로봇 팔 실습이 어떻게 돌아가는지 그림 네 장으로 정리했습니다.</p>
+    <a class="card" href="folders/folders.html"><span class="no">1</span><div><h2>폴더 둘러보기</h2><p>어떤 파일을 열면 되는지. ★ 표시가 여러분이 직접 쓰는 파일입니다.</p></div></a>
+    <a class="card" href="system/system.html"><span class="no">2</span><div><h2>로봇 팔은 어떻게 움직이나요?</h2><p>버튼(펜던트)과 내 코드가 어떻게 로봇 팔까지 전달되는지.</p></div></a>
+    <a class="card" href="pickplace-side-by-side.html"><span class="no">3</span><div><h2>픽앤플레이스 한눈에 보기</h2><p>물체를 찾아서 집어 옮기기까지 전체 흐름과 10단계를 나란히.</p></div></a>
+    <a class="card" href="tensteps/tensteps.html"><span class="no">4</span><div><h2>집어서 옮기는 10단계</h2><p>로봇 팔이 물체를 잡고, 옮기고, 놓는 순서.</p></div></a>
+  <p class="other">Space = 멈춤 · Esc = 비상 정지</p>
+</main></body></html>
