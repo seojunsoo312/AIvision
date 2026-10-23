@@ -490,6 +490,30 @@ class Visualizer:
         )
         node.set_transform(np.eye(4))
 
+    def set_overlay_disc(
+        self,
+        name: str,
+        center_m: np.ndarray,
+        *,
+        radius_m: float,
+        thickness_m: float = 0.001,
+        color: int = 0xEF4444,
+        opacity: float = 1.0,
+    ) -> None:
+        """월드 위치(m)에 바닥과 나란한 납작한 원판을 그린다 (축 = 월드 +Z)."""
+        node = self._overlay(name)
+        node.set_object(
+            g.Cylinder(float(thickness_m), float(radius_m)),
+            g.MeshLambertMaterial(
+                color=int(color), reflectivity=0.1, opacity=float(opacity), transparent=float(opacity) < 1.0
+            ),
+        )
+        T = np.eye(4)
+        # Three.js 원기둥은 +Y 방향. Rx(+90°) 로 +Z 에 세운다.
+        T[:3, :3] = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+        T[:3, 3] = np.asarray(center_m, dtype=float).reshape(3)
+        node.set_transform(T)
+
     def set_overlay_spheres(
         self,
         name: str,

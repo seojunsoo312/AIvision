@@ -78,10 +78,10 @@ PRE_TCP_MATCH_POS_MM = 1.5
 APPROACH_PRE_COLOR = 0xFB923C
 APPROACH_PRE_MATCH_COLOR = 0x22C55E
 APPROACH_OTHER_COLOR = 0xC2410C
-# Meshcat 의 놓기 위치 표시: 바닥 위 보라색 구 (반지름 m, 중심 높이 m).
-DROP_MARKER_COLOR = 0xA855F7
-DROP_MARKER_RADIUS_M = 0.008
-DROP_MARKER_Z_M = 0.008
+# Meshcat 의 놓기 위치 표시: 바닥에 붙은 빨간 원판 (반지름 · 두께 m).
+DROP_MARKER_COLOR = 0xEF4444
+DROP_MARKER_RADIUS_M = 0.003
+DROP_MARKER_THICK_M = 0.0005
 # 입력 칸 이름 (입력 오류 문구에 쓴다).
 _ENTRY_LABELS = {
     "place_x": "사물 x", "place_y": "사물 y", "place_z": "사물 z",
@@ -994,7 +994,7 @@ class TeachGraspGui:
             self._show_robot(grasp.gripper)
 
     def _draw_drop_marker(self) -> None:
-        """놓기 x/y 위치를 Meshcat 바닥에 보라색 구로 보인다. 숫자가 아니면 지운다."""
+        """놓기 x/y 위치를 Meshcat 바닥에 빨간 원판으로 보인다. 숫자가 아니면 지운다."""
         try:
             dx, dy = self._read_float("drop_x"), self._read_float("drop_y")
         except (KeyError, ValueError):
@@ -1002,9 +1002,11 @@ class TeachGraspGui:
             return
         T = np.eye(4)
         T[:3, 3] = [dx / 1000.0, dy / 1000.0, 0.0]
-        center = _T_meshcat(T)[:3, 3] + np.array([0.0, 0.0, DROP_MARKER_Z_M])
-        self._viz.set_overlay_spheres(
-            "drop_marker", center.reshape(1, 3), radius_m=DROP_MARKER_RADIUS_M, color=DROP_MARKER_COLOR
+        # 바닥(z=0) 바로 위에 두께의 절반만 올려 바닥 격자와 겹쳐 깜박이지 않게 한다.
+        center = _T_meshcat(T)[:3, 3] + np.array([0.0, 0.0, DROP_MARKER_THICK_M / 2.0])
+        self._viz.clear_overlay("drop_marker")
+        self._viz.set_overlay_disc(
+            "drop_marker", center, radius_m=DROP_MARKER_RADIUS_M, thickness_m=DROP_MARKER_THICK_M, color=DROP_MARKER_COLOR
         )
 
     def _set_collision_warn(self, text: str) -> None:
