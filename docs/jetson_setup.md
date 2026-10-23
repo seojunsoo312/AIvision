@@ -11,7 +11,7 @@
 아래 2~5번과 확인을 스크립트로 한 번에 합니다. 납품 보드처럼 사람이 직접 까는 경우에 씁니다. 인터넷이 필요하고, 처음에 sudo 비밀번호를 한 번 묻습니다. 중간에 멈추면 같은 명령을 다시 실행합니다. 끝난 단계는 건너뜁니다.
 
 ```bash
-git clone https://github.com/seojunsoo312/SO-ARM_xyzrpy_control.git ~/AIvision
+git clone https://github.com/seojunsoo312/AIvision.git ~/AIvision
 bash ~/AIvision/deploy/setup_jetson.sh          # 보드 설정, Orbbec SDK, conda, AIvision 환경, 점검 (30분~1시간)
 # 다시 로그인한 뒤, 팔을 하나씩 꽂으며
 bash ~/AIvision/deploy/make_serial_rules.sh     # /dev/so101_follower, /dev/so101_leader 이름
@@ -80,7 +80,7 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 ```bash
 cd ~
-git clone https://github.com/seojunsoo312/SO-ARM_xyzrpy_control.git AIvision
+git clone https://github.com/seojunsoo312/AIvision.git AIvision
 # ARM64 SDK 압축을 홈에 풀기 → ~/OrbbecSDK_v1.10.xx_... 또는 ~/OrbbecViewer_v1.10.xx_...
 mkdir -p ~/AIvision/yolo/weights && cp /media/$USER/<USB>/best.pt ~/AIvision/yolo/weights/
 

@@ -3,7 +3,7 @@
 # docs/jetson_setup.md 2~5번을 순서대로 하고, 끝나면 deploy/check_board.py 로 점검한다.
 # 이미 끝난 단계는 건너뛰므로 중간에 멈추면 같은 명령을 다시 실행하면 된다.
 #
-#   git clone https://github.com/seojunsoo312/SO-ARM_xyzrpy_control.git ~/AIvision
+#   git clone https://github.com/seojunsoo312/AIvision.git ~/AIvision
 #   bash ~/AIvision/deploy/setup_jetson.sh
 #
 # 인터넷이 필요하다. 처음에 sudo 비밀번호를 한 번 묻는다.

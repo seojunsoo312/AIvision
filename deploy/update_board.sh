@@ -17,6 +17,9 @@ set -uo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRANCH="main"
+# 저장소 주소. 예전 이름(SO-ARM_xyzrpy_control)으로 받은 보드는 이 주소로 바꿔 둔다.
+REPO_URL="https://github.com/seojunsoo312/AIvision.git"
+OLD_REPO_NAME="SO-ARM_xyzrpy_control"
 STAMP="$(date +%Y-%m-%d_%H%M)"
 DESKTOP="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
 [ -d "$DESKTOP" ] || DESKTOP="$HOME/Desktop"
@@ -56,6 +59,9 @@ ok "닫혀 있음"
 # ---------------------------------------------------------------- 2. 최신 버전 받기
 say "2. GitHub 에서 최신 버전 확인"
 old_rev="$(git rev-parse HEAD)"
+if git remote get-url origin 2>/dev/null | grep -q "$OLD_REPO_NAME"; then
+  git remote set-url origin "$REPO_URL" && ok "저장소 주소를 새 이름으로 바꿨습니다: $REPO_URL"
+fi
 git fetch --quiet origin "$BRANCH" || die "GitHub 에 연결하지 못했습니다. 인터넷 연결을 확인하세요."
 new_rev="$(git rev-parse "origin/$BRANCH")"
 ok "지금 $(git rev-parse --short "$old_rev")  →  최신 $(git rev-parse --short "$new_rev")"
