@@ -350,7 +350,21 @@ class Arm:
         viz.display(st.q)
 
     def _wait_started(self, duration_s: float, *, joint: bool) -> None:
-        """시작한 이동이 끝날 때까지 기다린다. 실패·중단·시간 초과면 ArmError."""
+        """시작한 이동이 끝날 때까지 기다린다. 실패·중단·시간 초과면 ArmError.
+
+        노트북의 ■(중단) 이나 Ctrl+C 로 기다림을 끊으면 팔도 그 자리에서 멈춘다.
+        (그냥 두면 기다림만 끝나고 팔은 제어 스레드에서 목표까지 계속 간다.)
+        """
+        try:
+            self._wait_until_done(duration_s, joint=joint)
+        except KeyboardInterrupt:
+            ctrl = self._ctrl
+            if ctrl is not None:
+                ctrl.stop_all()
+                self._show()
+            raise ArmError("중단 — ■ 버튼(또는 Ctrl+C)으로 팔을 멈췄습니다") from None
+
+    def _wait_until_done(self, duration_s: float, *, joint: bool) -> None:
         ctrl = self._require_ctrl()
         st = ctrl.snapshot()
         fault = str(st.fault or "")
