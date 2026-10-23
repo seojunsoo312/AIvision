@@ -22,6 +22,7 @@ bash ~/AIvision/deploy/calibrate_arms.sh        # 팔로워 → 리더 캘리브
 - `yolo/weights/best.pt`는 git에 없으므로 USB로 복사합니다. 없으면 점검에서 「경고」로 나옵니다.
 - 이미 `~/miniconda3`가 있는 보드는 그 conda를 씁니다. 없으면 `~/miniforge3`를 설치합니다(위 마지막 줄의 경로도 그쪽).
 - 로그는 홈에 `aivision_setup_날짜.log`로 남습니다.
+- 바탕화면에 아이콘 두 개가 생깁니다. **「AIvision 터미널」**은 terminator 를 4칸(pendant · vision · yolo · AIvision)으로 열고 칸마다 `AIvision` 환경을 켜 둡니다. **「AIvision 업데이트」**는 9번에서 씁니다. terminator 는 미리 `sudo apt install -y terminator` 로 깔아 둡니다. 아이콘만 다시 만들려면 `bash ~/AIvision/deploy/install_terminal_icon.sh`.
 - 점검(`check_board.py`)은 항목마다 통과·경고·실패를 냅니다. 팔·카메라가 안 꽂혀 있으면 경고이고, 실패가 있으면 종료 코드 1입니다.
 
 ## 0. 먼저 알아 둘 것

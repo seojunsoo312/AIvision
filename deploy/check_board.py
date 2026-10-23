@@ -82,6 +82,18 @@ def _():
     return (PASS, str(icon)) if icon.is_file() else (WARN, "없음 — bash deploy/install_update_icon.sh")
 
 
+@check("바탕화면 「AIvision 터미널」 아이콘 (4칸)")
+def _():
+    desk = sh("xdg-user-dir DESKTOP") or str(Path.home() / "Desktop")
+    icon = Path(desk) / "aivision-terminal.desktop"
+    cfg = Path.home() / ".config" / "terminator" / "config"
+    if not icon.is_file():
+        return (WARN, "없음 — bash deploy/install_terminal_icon.sh")
+    if not cfg.is_file() or "[[aivision]]" not in cfg.read_text(encoding="utf-8", errors="ignore"):
+        return (WARN, "terminator 레이아웃 없음 — bash deploy/install_terminal_icon.sh")
+    return (PASS, str(icon))
+
+
 print("== 카메라")
 
 
