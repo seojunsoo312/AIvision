@@ -192,6 +192,11 @@ ls -l /dev/so101_*
 
 `AIvision` 환경에서 `lerobot-calibrate`로 합니다(7축, id는 `follower`, `leader`). 결과는 이 보드의 `~/.cache/huggingface/lerobot/calibration/robots/so_follower/follower.json`, `.../teleoperators/so_leader/leader.json`에 저장되고, 펜던트 Connect가 그 파일을 읽습니다. 팔마다 다르므로 보드 사이에 복사하지 않습니다.
 
+`deploy/calibrate_arms.sh`는 `lerobot-calibrate` 대신 `deploy/calibrate_7dof.py`를 씁니다. 순서는 같고 두 가지가 다릅니다.
+- 첫 Enter는 **HOME 자세(L자, 모든 관절 0)** 에서 누릅니다. 이 자세가 관절 0°가 됩니다.
+- lerobot은 `wrist_roll`을 끝없이 도는 관절로 보고 범위를 0~4095로 고정합니다. 이 팔은 반대입니다. `wrist_roll`은 턱이 있어 다른 관절처럼 턱까지 돌려 기록하고, 턱 없이 도는 `elbow_roll`은 표에 MIN 0 / MAX 4095 `(고정)`으로 나오고 그대로 저장합니다(돌리지 않아도 됨).
+- 모터가 켜진 뒤 엔코더 경계를 넘으면 위치가 0~4095 밖(예: −19)으로 나와 lerobot 이 `Magnitude … exceeds 2047` 로 멈춥니다. 이때는 그 팔을 HOME 자세로 둔 채 전원 어댑터를 뽑았다 꽂고 다시 합니다(스크립트가 한국어로 알려 줍니다).
+
 **확인**: `python pendant/main.py` → Connect → 팔이 튀지 않고 지금 자세에서 조그가 됨.
 
 ## 7. 수업 흐름 한 번 돌려 보기 (마스터에서)

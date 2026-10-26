@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# 7축 팔 캘리브. 기존 캘리브 파일을 백업한 뒤 lerobot-calibrate 를 실행한다.
+# 7축 팔 캘리브. 기존 캘리브 파일을 백업한 뒤 deploy/calibrate_7dof.py 를 실행한다
+# (lerobot-calibrate 와 같고, wrist_roll 은 턱까지 돌려 기록, elbow_roll 은 0~4095 고정).
 # conda activate 를 하지 않아도 AIvision 환경의 lerobot-calibrate 를 찾는다.
 #
 #   bash ~/AIvision/deploy/calibrate_arms.sh            # 팔로워 → 리더
 #   bash ~/AIvision/deploy/calibrate_arms.sh follower   # 팔로워만
 #   bash ~/AIvision/deploy/calibrate_arms.sh leader     # 리더만
 #
-# 각 단계에서 lerobot-calibrate 가 안내하는 대로 팔을 가운데 두고 Enter, 관절을 끝까지
+# 각 단계에서 안내하는 대로 팔을 HOME(L자) 자세로 두고 Enter, elbow_roll 을 뺀 관절을 턱까지
 # 천천히 돌린 뒤 Enter. 펜던트(pendant/main.py)는 꺼 둔다 (같은 포트를 열 수 없다).
 set -euo pipefail
 
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 which="${1:-all}"
 case "$which" in all|follower|leader) ;; *) echo "인자는 all, follower, leader 중 하나"; exit 1;; esac
 
@@ -45,7 +47,7 @@ run_one() {  # $1 = follower|leader
   echo "== $role 캘리브 ($port)"
   [ -e "$port" ] || { echo "$port 가 없습니다. 팔을 꽂거나 bash deploy/make_serial_rules.sh 를 먼저 하세요."; return 1; }
   backup "$file"
-  "$CAL" "${args[@]}"
+  "$(dirname "$CAL")/python" "$PROJECT_DIR/deploy/calibrate_7dof.py" "${args[@]}"
   [ -f "$file" ] && echo "   저장: $file" || { echo "   캘리브 파일이 생기지 않았습니다."; return 1; }
 }
 
