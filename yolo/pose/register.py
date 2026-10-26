@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from vision.transforms import apply_T, axis_angle_R, rotation_aligning, rt_to_T
 from cad.model import apply_mesh_frame, mesh_path, mesh_rpy_deg, mesh_xyz_mm, to_mm, unit as cad_unit
-from yolo.pose.depth_cloud import write_ply
+from vision.depth_cloud import write_ply
 
 MIN_POINTS = 20
 _CAD_CACHE: dict[tuple, np.ndarray] = {}

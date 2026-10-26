@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from cad.model import class_name
+from vision.gui_env import quiet_gtk  # noqa: F401  (yolo 스크립트들이 여기서 가져다 쓴다)
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
@@ -30,7 +31,7 @@ VAL_TXT = SPLITS_DIR / "val.txt"
 DATA_YAML = ROOT / "data.yaml"
 WEIGHTS_DIR = ROOT / "weights"
 RUNS_DIR = ROOT / "runs"
-# 등록 요청 파일과 대기 시간은 yolo/pose/register_link.py.
+# 등록 요청 파일(runs/roi/)과 대기 시간은 motion/register_link.py.
 BEST_PT = WEIGHTS_DIR / "best.pt"
 
 # 부품 이름(class)은 cad/model.yaml 에만 둔다. 읽기는 cad.model.
@@ -89,54 +90,3 @@ def default_start_pt() -> str:
     return str(local) if local.is_file() else name
 
 
-def _system_font_dir() -> Path | None:
-    for fonts in (
-        Path("/usr/share/fonts/truetype/dejavu"),
-        Path("/usr/share/fonts/truetype/liberation"),
-        Path("/usr/share/fonts/truetype"),
-    ):
-        if fonts.is_dir() and any(fonts.glob("*.ttf")):
-            return fonts
-    return None
-
-
-def _link_cv2_qt_fonts(fonts: Path) -> None:
-    """opencv-python 의 Qt 는 fontconfig 가 없고 cv2/qt/fonts 만 본다."""
-    import sys
-
-    ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    qt_dirs = [
-        Path(sys.executable).resolve().parent.parent / "lib" / ver / "site-packages" / "cv2" / "qt",
-    ]
-    for entry in sys.path:
-        qt_dirs.append(Path(entry) / "cv2" / "qt")
-    target = fonts.resolve()
-    for qt in qt_dirs:
-        if not qt.is_dir():
-            continue
-        dest = qt / "fonts"
-        try:
-            if dest.is_symlink() and dest.resolve() == target:
-                return
-            if dest.exists():
-                return
-            dest.symlink_to(target, target_is_directory=True)
-        except OSError:
-            continue
-        return
-
-
-def quiet_gtk() -> None:
-    for key in ("GTK_MODULES", "GTK3_MODULES"):
-        raw = os.environ.get(key)
-        if not raw:
-            continue
-        os.environ[key] = ":".join(
-            p for p in raw.split(":") if p and "canberra" not in p.lower()
-        )
-    # conda opencv-python 의 Qt 는 글꼴을 안 넣고, cv2/qt/fonts 가 없으면 경고만 낸다.
-    fonts = _system_font_dir()
-    if fonts is None:
-        return
-    os.environ["QT_QPA_FONTDIR"] = str(fonts)
-    _link_cv2_qt_fonts(fonts)

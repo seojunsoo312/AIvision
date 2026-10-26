@@ -12,7 +12,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from yolo.pose.depth_cloud import pca_obb
+from vision.depth_cloud import pca_obb
 from yolo.pose.instances import height_above_plane
 
 SLICE_MM = 6.0

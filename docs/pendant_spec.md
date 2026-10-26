@@ -5,7 +5,7 @@
 본 프로젝트는 6자유도(6-DOF) 로봇팔인 SO101_6DOF (SO-101 기반, `elbow_roll` 모터 추가)을 제어하기 위한 GUI 기반의 독립형 티칭 펜던트 소프트웨어를 개발하는 것이다. 무거운 ROS 2 생태계를 배제하고, 순수 파이썬 환경에서 조그(Jog) 제어와 디지털 트윈(가상 시뮬레이션)을 구현한다.
 
 - 팔 관절 6축 + 그리퍼 1축 (서보 총 7개). 카르테시안 IK는 팔 6축만 사용하고, 그리퍼는 독립 축이다.
-- UI / 기구학 / 하드웨어 / **뷰어**를 모듈로 분리한다. IK·시리얼·제어 루프는 프로젝트 루트 `motion/` 에 둔다. `pendant/` 는 조그 GUI(`gui_app.py`)와 사물 패널(`teach_grasp.py`)만 둔다. Meshcat(`motion/visualizer.py`)과 URDF·메시(`motion/robot/`)는 교육용 `Arm` 도 같이 쓰므로 `motion/` 에 있다. 팔로워 캘리브 JSON은 이 PC의 `lerobot-calibrate` 캐시다. 조그 GUI는 속도·목표 포즈 명령만 넣고, 제어 루프는 관절각 `q`와 끝단 상태만 돌려준다. IK는 뷰어 안에 두지 않는다.
+- UI / 기구학 / 하드웨어 / **뷰어**를 모듈로 분리한다. IK·시리얼·제어 루프는 프로젝트 루트 `motion/` 에 둔다. `pendant/` 는 조그 GUI(`gui_app.py`)와 사물 패널(화면 `teach_grasp.py`, 계산·실행 `teach_logic.py`, 3D 그리기 `teach_scene.py`)만 둔다. Meshcat(`motion/visualizer.py`)과 URDF·메시(`motion/robot/`)는 교육용 `Arm` 도 같이 쓰므로 `motion/` 에 있다. 팔로워 캘리브 JSON은 이 PC의 `lerobot-calibrate` 캐시다. 조그 GUI는 속도·목표 포즈 명령만 넣고, 제어 루프는 관절각 `q`와 끝단 상태만 돌려준다. IK는 뷰어 안에 두지 않는다.
 - 가상 모드에서는 로봇 없이 3D 뷰만 동작해야 한다. 실물 모드는 기존 LeRobot Feetech 버스를 감싸서 사용하며, Feetech 시리얼 프로토콜을 새로 구현하지 않는다.
 - **조그 입력은 버튼과 숫자다.** Meshcat은 그 결과의 TCP와, `--grasp`일 때 사물 CAD를 보여 준다. 3D를 드래그해서 집을 대상은 아니다. 계약은 `Visualizer.display(q)` 이다.
 
@@ -55,16 +55,16 @@ gui_app.py  ──cmd──►  motion.Controller  ──q──►  Visualizer
 teach_grasp.py ──접근 자세──► 같은 Controller, 같은 Meshcat
        │
        └──등록 요청──►  yolo/pose/roi_cloud.py (--cad)
-                        (yolo/pose/register_link.py)
+                        (motion/register_link.py)
 ```
 
 * `gui_app.py`: 조그 위젯. Pinocchio를 직접 두지 않고 `motion` 상태만 표시한다.
-* `teach_grasp.py`: 사물 xyzrpy, grasp yaml, 접근 자세 표시, 픽 버튼. 계산은 `motion/grasp.py`. `python pendant/main.py --grasp` 로 같은 창에서 연다. 없으면 칸이 잠긴다.
+* `teach_grasp.py`: 사물 xyzrpy 칸, 픽 버튼 (화면만). 계산·실행은 `teach_logic.py`, 3D 표시는 `teach_scene.py`, 접근 자세 계산은 `motion/grasp.py`. `python pendant/main.py --grasp` 로 같은 창에서 연다. 없으면 칸이 잠긴다.
 * `ui_style.py`: CustomTkinter 글꼴·테마.
 * `controller.py`: 조그·go-to·안전·모드 전환의 단일 루프. `q`의 소유자. `motion/`에 있다.
 * `robot_kinematics.py`: URDF, FK, 자코비안, DLS IK, TCP 오프셋. 모터/GUI/뷰어 모름.
 * `hw_controller.py`: `SOFollower` 래퍼. 엔코더 읽기/목표각 쓰기, 토크 on/off, 캘리브 오프셋. IK 모름.
-* `motion/visualizer.py`: `display(q)` 퍼사드. 구현은 Meshcat. IK·시리얼·조그 입력 없음. 사물 메시는 `teach_grasp.py`가 같은 뷰어에 올린다.
+* `motion/visualizer.py`: `display(q)` 퍼사드. 구현은 Meshcat. IK·시리얼·조그 입력 없음. 사물 메시는 `teach_scene.py`가 같은 뷰어에 올린다.
 
 명령(`cmd`)과 상태(`state`) 계약은 대략 다음과 같다.
 
@@ -211,7 +211,9 @@ DLS 튜닝 시작점(예제에서 검증됨, 6축에 맞게 재조정 가능): `
 pendant/
 ├── main.py                 # 진입점. --grasp 로 사물 패널
 ├── gui_app.py              # 조그 CustomTkinter
-├── teach_grasp.py          # 사물 패널 GUI (계산은 motion/grasp.py)
+├── teach_grasp.py          # 사물 패널 화면
+├── teach_logic.py          # 사물 패널 계산 · 실행 (화면 없음)
+├── teach_scene.py          # 사물 패널 3D 그리기 (Meshcat)
 └── ui_style.py
 
 motion/                     # IK, 시리얼, Arm, 접근 자세(grasp.py), 픽 좌표

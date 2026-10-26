@@ -2,7 +2,7 @@
 
 책상 위 물체를 집어 다른 XY에 내려놓는 시퀀스다. GUI와 YOLO는 이 파일에 없다. 펜던트 **픽앤플레이스** 버튼이 단계를 만들어 `PickPlaceRunner`에 넘긴다.
 
-호출은 `pendant/teach_grasp.py`의 `start_pick_place()`이다. 버튼은 50ms마다 `tick()`을 호출하고, 상태 줄에 지금 단계 이름을 쓴다.
+호출은 `pendant/teach_grasp.py`의 `start_pick_place()`이다(단계 만들기는 `pendant/teach_logic.py`의 `pick_place_steps()`). 버튼은 50ms마다 `tick()`을 호출하고, 상태 줄에 지금 단계 이름을 쓴다.
 
 같은 창의 **픽앤플레이스(유저생성)** 은 이 시퀀스를 타지 않는다. 프로젝트 루트 `user_pickandplace.py`의 `run(arm)`을, 펜던트가 이미 쓰는 컨트롤러에 붙여 실행한다.
 

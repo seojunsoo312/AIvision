@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 try:
-    from yolo.config import quiet_gtk
+    from vision.gui_env import quiet_gtk
 
     quiet_gtk()
 except Exception:

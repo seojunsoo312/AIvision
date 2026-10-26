@@ -11,7 +11,7 @@ from motion.arm import Arm, ArmError
 from motion.grasp import PlacePose, T_to_xyzrpy, compute_auto_pre
 from motion.pick_place import rpy_tcp_rx_parallel_base_x
 from motion.robot_kinematics import DEFAULT_URDF, RobotKinematics
-from yolo.pose.register_link import (
+from motion.register_link import (
     REG_MSG_BUSY,
     REG_MSG_FAIL,
     REG_MSG_NO_BOX,

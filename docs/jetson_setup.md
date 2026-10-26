@@ -217,7 +217,7 @@ ls -l /dev/so101_*
 
 - `tegrastats`로 메모리. 카메라 창 + 펜던트 + 브라우저 + 노트북을 같이 켜도 스왑을 크게 쓰지 않는지.
 - 카메라 창 첫 줄의 `device=0`(GPU). `cpu`면 5번 확인의 torch 줄을 다시 봅니다.
-- 「물체 위치 불러오기」가 30초 안에 끝나는지. 넘으면 「카메라 창이 응답하지 않습니다」가 납니다(`yolo/pose/register_link.py`의 `REG_JOB_S`).
+- 「물체 위치 불러오기」가 30초 안에 끝나는지. 넘으면 「카메라 창이 응답하지 않습니다」가 납니다(`motion/register_link.py`의 `REG_JOB_S`).
 - 실행한 폴더에 `Log/`가 생기지 않는지.
 
 마스터(Orin Nano Super, MAXN_SUPER)에서 잰 값입니다. 수업 준비의 기준으로 씁니다.
@@ -281,6 +281,11 @@ sudo hostnamectl set-hostname jetson-03         # 선택: 보드 구분용 이�
 - git 에 없는 것은 아이콘이 바꾸지 않습니다. `yolo/weights/best.pt` 는 USB 로 복사합니다.
 - 카메라 캘리브(`vision/calib_data/`), 필터 값(`vision/orbbec_filters.json`), 팔 캘리브는 보드마다 다르므로 git 에 없고 업데이트해도 그대로입니다.
 - 강의자 보드(개발용)에서는 아이콘을 쓰지 않습니다. 커밋하지 않은 작업이 백업 폴더로 옮겨지고 저장소가 GitHub 상태로 돌아가기 때문입니다.
+- 강의자 보드에서 코드를 고쳤으면 커밋 전에 자동 테스트를 돌립니다. 팔·카메라 없이 20초쯤 걸리고, 모두 `OK` 여야 합니다. 좌표 변환 · 집기 좌표 · 픽앤플레이스 순서 · 사물 패널 계산과, 폴더끼리 부르는 방향(`cad → motion → vision → yolo → pendant`, 아래층이 위층을 부르면 실패)을 봅니다.
+
+  ```bash
+  cd ~/AIvision && python -m unittest discover -s tests -t .
+  ```
 
 ## 10. 문제가 생겼을 때 (실행 기록)
 

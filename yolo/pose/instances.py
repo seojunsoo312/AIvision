@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from vision.transforms import apply_T
-from yolo.pose.depth_cloud import (
+from vision.depth_cloud import (
     Z_MAX_MM,
     Z_MIN_MM,
     largest_component,

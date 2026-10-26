@@ -431,7 +431,7 @@ def grab_desk_plane_cam(*, frames: int = 8) -> np.ndarray:
     """카메라로 빈 책상을 여러 번 찍어 RANSAC 평면을 구하고 평균 낸다 (카메라 좌표)."""
     from vision.calib import load_K, intrinsics_for_rotate180
     from vision.camera import FRAME_HEIGHT, FRAME_WIDTH, ROTATE_180
-    from yolo.pose.depth_cloud import fit_plane_ransac, open_orbbec, points_from_mask, rotate180
+    from vision.depth_cloud import fit_plane_ransac, open_orbbec, points_from_mask, rotate180
 
     K, _ = load_K()
     if ROTATE_180:

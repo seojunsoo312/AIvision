@@ -47,11 +47,9 @@ python yolo/pose/roi_cloud.py                # 점군을 CAD와 맞춰 로봇 �
 | `train/prepare.py` | 사진을 복사하지 않고 train/val 목록만 만듭니다. |
 | `train/train.py` | YOLO11n으로 학습합니다. 결과는 `weights/best.pt`입니다. |
 | `train/detect.py` | 학습한 가중치로 실시간 박스를 띄웁니다. |
-| `pose/roi_cloud.py` | 카메라 루프. 박스에서 점군을 만들고 CAD와 맞춰 로봇 기준 위치를 구합니다. |
-| `pose/depth_cloud.py` | 뎁스를 점군으로 바꿉니다. |
+| `pose/roi_cloud.py` | 카메라 루프. 박스에서 점군을 만들고(`vision/depth_cloud.py`) CAD와 맞춰 로봇 기준 위치를 구합니다. 펜던트의 등록 요청은 `motion/register_link.py` 약속으로 받습니다. |
 | `pose/instances.py` | 검출마다 점군을 모으고 가장 위에 있는 하나를 고릅니다. |
 | `pose/register.py` | 그 점군과 `cad/` STL을 맞춰 위치와 자세를 만듭니다. |
-| `pose/register_link.py` | 펜던트와 `load_pick_targets()`가 이 창에 등록을 요청하고 결과를 받는 약속. 요청·상태 파일(`runs/roi/`), 대기 시간, 오류 문구가 여기 있습니다. |
 | `pose/debug/local_plane.py` | 화면에서 윗면을 보는 확인용입니다. 로봇에 넘기는 자세는 아닙니다. |
 | `pose/view/view_cad.py` | `cad/` STL 축을 보여 줍니다. |
 | `pose/view/view_cloud.py` | 저장한 ply를 보여 줍니다. |
@@ -63,4 +61,4 @@ python yolo/pose/roi_cloud.py                # 점군을 CAD와 맞춰 로봇 �
 
 - 카메라와 손눈 결과는 `vision/`입니다. 로봇 기준 위치는 `vision/calib_data/eye_to_hand.json`으로 만듭니다.
 - 맞출 형상과 집기 숫자는 `cad/model.yaml`입니다.
-- 펜던트 「물체 위치 불러오기」와 `load_pick_targets()`는 `roi_cloud.py`가 켜져 있어야 좌표를 받습니다. 주고받는 방법은 `pose/register_link.py`입니다. 요청 뒤 2초 안에 창이 받지 않거나, 받은 뒤 30초 안에 끝나지 않으면 「카메라 창이 응답하지 않습니다」가 납니다.
+- 펜던트 「물체 위치 불러오기」와 `load_pick_targets()`는 `roi_cloud.py`가 켜져 있어야 좌표를 받습니다. 주고받는 방법은 `motion/register_link.py`입니다. 요청 뒤 2초 안에 창이 받지 않거나, 받은 뒤 30초 안에 끝나지 않으면 「카메라 창이 응답하지 않습니다」가 납니다.

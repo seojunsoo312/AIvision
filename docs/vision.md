@@ -27,6 +27,8 @@ python vision/handeye/compare_pnp_depth.py # 보드 거리와 뎁스 거리 비�
 | `orbbec_filters.py` | 뎁스 필터 창. 마지막 값은 `orbbec_filters.json`에 저장됩니다(git에 없음). 그 파일이 없으면 `orbbec_filters.default.json`에서 시작합니다. |
 | `calib.py` | 캘리브 JSON을 읽고 씁니다. |
 | `transforms.py` | 좌표 변환. 카메라 픽셀을 3D 점으로 바꿉니다. |
+| `depth_cloud.py` | 뎁스를 점군으로 바꾸고, 책상 평면 찾기 · 박스 안 점 고르기를 합니다. 카메라 창(`yolo/pose/`)과 손눈 계산이 씁니다. |
+| `gui_env.py` | 창을 띄우기 전에 부르는 `quiet_gtk()`. GTK 소리 경고를 끄고 OpenCV 창에 글꼴을 알려 줍니다. |
 | `handeye/charuco.py` | 캘리브 보드를 사진에서 찾습니다. |
 | `handeye/vision_test.py` | 컬러 화면만 띄웁니다. |
 | `handeye/get_intrinsic.py` | 공장 내부 값을 `calib_data/intrinsics.json`에 저장합니다. |

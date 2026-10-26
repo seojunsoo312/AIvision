@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from yolo.config import quiet_gtk
+from vision.gui_env import quiet_gtk
 
 quiet_gtk()
 
@@ -41,7 +41,7 @@ from yolo.config import (
     RUNS_DIR,
     pose_name,
 )
-from yolo.pose.depth_cloud import (
+from vision.depth_cloud import (
     colorize_depth,
     fit_plane_ransac,
     open_orbbec,
@@ -51,7 +51,7 @@ from yolo.pose.depth_cloud import (
 )
 from yolo.pose.debug.local_plane import SLICE_MM, local_pose
 from yolo.pose.instances import collect_instances, select_topmost
-from yolo.pose.register_link import read_request, write_status
+from motion.register_link import read_request, write_status
 from motion import runlog  # noqa: E402
 
 import cv2  # noqa: E402

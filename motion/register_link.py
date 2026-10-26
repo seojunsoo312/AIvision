@@ -20,10 +20,12 @@ import uuid
 from pathlib import Path
 
 from motion import runlog
-from yolo.config import RUNS_DIR
 
-REGISTER_REQUEST_JSON = RUNS_DIR / "roi" / "register_request.json"
-REGISTER_STATUS_JSON = RUNS_DIR / "roi" / "register_status.json"
+# 요청 · 상태 파일은 카메라 창(yolo/pose/roi_cloud.py)의 기록 폴더에 둔다.
+_ROI_DIR = Path(__file__).resolve().parent.parent / "yolo" / "runs" / "roi"
+
+REGISTER_REQUEST_JSON = _ROI_DIR / "register_request.json"
+REGISTER_STATUS_JSON = _ROI_DIR / "register_status.json"
 REG_ACK_S = 2.0  # 요청 → run 까지
 REG_JOB_S = 30.0  # run → 끝까지
 REG_POLL_MS = 200
