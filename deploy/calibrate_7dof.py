@@ -9,6 +9,8 @@ lerobot 은 wrist_roll 을 끝없이 도는 관절로 보고 범위를 0~4095 �
 관절 0° 는 범위와 상관없이 첫 단계에서 Enter 를 누른 자세다 (motion/hw_controller.py
 _enter_offsets_deg). 그래서 범위를 기록해도 0° 는 바뀌지 않는다.
 
+리더 그리퍼는 drive_mode=1 로 저장한다 (텔레오퍼레이션에서 팔로워와 같은 방향).
+
 deploy/calibrate_arms.sh 가 부른다. 인자는 lerobot-calibrate 와 같다.
 """
 
@@ -25,6 +27,10 @@ from lerobot.teleoperators.so_leader.so_leader import SOLeader
 from lerobot.utils.utils import enter_pressed, move_cursor_up
 
 logger = logging.getLogger(__name__)
+
+# 리더 그리퍼는 팔로워와 여는 방향이 반대다. drive_mode=1 이면 lerobot 이 0~100 을 뒤집어(100 - 값)
+# 읽어서 lerobot-teleoperate 에서 같은 방향으로 따라온다. 소프트웨어 값이라 모터에는 쓰지 않는다.
+REVERSED_LEADER_MOTORS = ("gripper",)
 
 FULL_TURN_MOTORS = ("elbow_roll",)  # 턱 없이 계속 도는 관절. 범위를 기록하지 않고 0~4095 로 고정한다.
 
@@ -113,7 +119,7 @@ def _calibrate_all_joints(self) -> None:
     self.calibration = {
         motor: MotorCalibration(
             id=m.id,
-            drive_mode=0,
+            drive_mode=int(isinstance(self, SOLeader) and motor in REVERSED_LEADER_MOTORS),
             homing_offset=homing_offsets[motor],
             range_min=range_mins[motor],
             range_max=range_maxes[motor],
