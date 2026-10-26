@@ -15,11 +15,17 @@ fi
 conda activate AIvision 2>/dev/null || printf '\033[31m! AIvision 환경을 켜지 못했습니다\033[0m\n'
 
 case "$(basename "$PWD")" in
-  pendant) _hint="python main.py   (픽앤플레이스: --grasp)" ;;
-  vision)  _hint="python handeye/vision_test.py · get_intrinsic.py · capture.py · compute.py" ;;
-  yolo)    _hint="python train/capture.py · label.py · prepare.py · train.py · detect.py
+  pendant) AIVISION_HINT="python main.py   (픽앤플레이스: --grasp)" ;;
+  vision)  AIVISION_HINT="python handeye/vision_test.py · get_intrinsic.py · capture.py · compute.py" ;;
+  yolo)    AIVISION_HINT="python train/capture.py · label.py · prepare.py · train.py · detect.py
    카메라 창: python pose/roi_cloud.py" ;;
-  *)       _hint="" ;;
+  *)       AIVISION_HINT="" ;;
 esac
-[ -z "$_hint" ] || printf '\033[1;36m▶ %s\033[0m\n' "$_hint"
-unset _hint
+
+_aivision_hint() { [ -z "$AIVISION_HINT" ] || printf '\033[1;36m▶ %s\033[0m\n' "$AIVISION_HINT"; }
+
+# clear 나 Ctrl+L 로 화면을 지워도 안내 줄이 다시 나오게 한다.
+clear() { command clear "$@"; _aivision_hint; }
+bind -x '"\C-l": clear' 2>/dev/null
+
+_aivision_hint
