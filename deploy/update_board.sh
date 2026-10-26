@@ -9,6 +9,7 @@
 #   2. 학생이 고친 파일을 바탕화면 AIvision_백업/날짜_시각/ 에 복사해 둔다.
 #   3. 저장소를 GitHub 과 똑같이 맞춘다 (git reset --hard). 새로 만든 파일, 캘리브,
 #      가중치, 로그처럼 git 이 모르는 파일은 건드리지 않는다.
+#   3-1. 바탕화면 「실행 코드.md」를 docs/실행 코드.md 로 맞춘다 (고친 것은 백업 폴더에 보관).
 #   4. 설치 목록(docs/requirements.txt, setup_jetson.sh)이 바뀌었으면 setup_jetson.sh 를 다시 돌린다.
 #   5. check_board.py 로 점검하고, 버전과 결과를 한 줄로 보여 준다.
 #
@@ -97,6 +98,18 @@ if [ "$old_rev" = "$new_rev" ] && [ "$backed" -eq 0 ]; then
 else
   git reset --quiet --hard "origin/$BRANCH" || die "맞추기에 실패했습니다 (git reset)."
   ok "$(git log -1 --format='%h  %ad  %s' --date=format:'%Y-%m-%d %H:%M' | cut -c1-90)"
+fi
+
+# 바탕화면 「실행 코드.md」 를 저장소의 docs/실행 코드.md 로 맞춘다. 학생이 바탕화면 파일을
+# 고쳐 두었으면 덮어쓰기 전에 백업 폴더에 보관한다.
+DOC_SRC="$PROJECT_DIR/docs/실행 코드.md"
+DOC_DST="$DESKTOP/실행 코드.md"
+if [ -f "$DOC_SRC" ]; then
+  if [ -f "$DOC_DST" ] && ! cmp -s "$DOC_SRC" "$DOC_DST"; then
+    mkdir -p "$BACKUP_DIR/바탕화면" && cp -p "$DOC_DST" "$BACKUP_DIR/바탕화면/" && backed=$((backed + 1))
+    printf '     바탕화면/실행 코드.md (예전 것 보관)\n'
+  fi
+  cp "$DOC_SRC" "$DOC_DST" && ok "바탕화면 「실행 코드.md」 최신으로"
 fi
 
 # ---------------------------------------------------------------- 5. 설치 다시 할지
