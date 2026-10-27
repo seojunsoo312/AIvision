@@ -93,7 +93,8 @@ def main() -> None:
                 imgsz=640,
             )
             result = results[0]
-            vis = result.plot()
+            # 물체가 없으면 plot() 이 카메라 영상(읽기 전용)을 그대로 돌려줘서 글자를 못 쓴다. 복사해서 쓴다.
+            vis = np.array(result.plot())
             n = 0
             obb = getattr(result, "obb", None)
             boxes = result.boxes
