@@ -1,6 +1,8 @@
 """손눈 사진으로 팔 관절의 0° 오차를 찾아 팔로워 캘리브와 손눈 결과를 함께 고친다.
 
-  python vision/handeye/compute.py --fix-zero
+  python vision/handeye/compute.py              # 손눈 계산 뒤 자동으로 점검하고, 고칠 만하면 물어본다
+  python vision/handeye/compute.py --fix-zero   # 점검 · 고치기만
+  python vision/handeye/compute.py --no-fix-zero  # 점검하지 않음
 
 왜 필요한가
   팔 캘리브는 첫 Enter 때의 자세(L자)를 관절 0° 로 쓴다 (motion/hw_controller.py).
@@ -253,29 +255,48 @@ def rewrite_samples(samples, applied: dict[str, float], kin: RobotKinematics | N
     return backup
 
 
-def run(samples_dir: Path, *, yes: bool = False) -> None:
-    """--fix-zero: 추정 → 확인 → 팔로워 캘리브 고치기 → 사진 기록 고치기 → 손눈 다시 계산."""
+def run(samples_dir: Path, *, yes: bool = False, after_compute: bool = False) -> None:
+    """관절 0° 오차를 풀고, 고칠 만하면 물어본 뒤 팔로워 캘리브 · 사진 기록 · 손눈 결과를 고친다.
+
+    after_compute=True: compute.py 가 손눈 계산을 막 끝낸 뒤 부른 경우. 사진 목록은 다시 찍어
+    보이지 않고, 이미 잘 맞으면 한 줄만 쓴다. 펜던트가 켜져 있으면 고치지 않고 다시 할 방법만 알린다.
+    after_compute=False (--fix-zero): 처음부터 펜던트가 켜져 있으면 멈춘다.
+    """
     from vision.handeye import compute as C
 
-    busy = port_users()
-    if busy:
-        raise SystemExit("팔로워를 다른 프로그램이 쓰고 있습니다. 펜던트 등을 먼저 닫으세요:\n  " + "\n  ".join(busy))
-    samples = C.load_samples(samples_dir)
+    if not after_compute:
+        busy = port_users()
+        if busy:
+            raise SystemExit("팔로워를 다른 프로그램이 쓰고 있습니다. 펜던트 등을 먼저 닫으세요:\n  " + "\n  ".join(busy))
+    samples = C.load_samples(samples_dir, quiet=after_compute)
     if len(samples) < MIN_SAMPLES:
-        raise SystemExit(f"쓸 수 있는 사진 {len(samples)}장. 최소 {MIN_SAMPLES}장. 먼저 capture.py 로 찍으세요.")
+        print(f"관절 0° 점검 건너뜀: 쓸 수 있는 사진 {len(samples)}장 (최소 {MIN_SAMPLES}장).")
+        return
     T_bc = C.solve_eye_to_hand([s.T_base_tcp for s in samples], [s.T_cam_board for s in samples])
     T_tb = C.mean_rigid([C.invert_T(s.T_base_tcp) @ T_bc @ s.T_cam_board for s in samples])
-    print("\n관절 오차를 푸는 중 (1~2분)...")
+    print("\n== 팔 관절 0° (캘리브 L자) 점검 중... (10~30초)")
     kin = RobotKinematics(DEFAULT_URDF)
     res = estimate(samples, T_bc, T_tb, kin)
+    if res.get("nothing"):
+        print(f"팔 관절 0°: {res['reason']}")
+        return
     print_estimate(res)
     if not res["ok"]:
-        print(f"\n적용하지 않음: {res['reason']}")
+        print(f"\n팔 캘리브는 고치지 않음: {res['reason']}")
+        return
+    busy = port_users()
+    if busy:
+        print(
+            "\n팔 캘리브의 L자가 틀어져 있습니다. 고치려면 펜던트를 끄고 다시 실행하세요:\n"
+            "  python vision/handeye/compute.py\n"
+            "지금 쓰는 프로그램:\n  " + "\n  ".join(busy)
+        )
         return
     if not yes:
-        ans = input("\n팔로워 캘리브와 손눈 결과를 이 값으로 고칠까요? 팔은 움직이지 않습니다. (y/N): ")
+        ans = input("\n팔 캘리브의 L자가 틀어져 있습니다. 팔로워 캘리브와 손눈 결과를 이 값으로 고칠까요?\n"
+                    "팔은 움직이지 않습니다. (y/N): ")
         if ans.strip().lower() not in ("y", "yes", "ㅛ"):
-            print("취소했습니다. 아무것도 바꾸지 않았습니다.")
+            print("고치지 않았습니다. 나중에 고치려면: python vision/handeye/compute.py --fix-zero")
             return
     dq = {j: v for j, v in res["dq_deg"].items() if abs(v) >= MIN_FIX_DEG / 3}
     applied, calib_backup = shift_follower_zero(dq)
@@ -284,7 +305,7 @@ def run(samples_dir: Path, *, yes: bool = False) -> None:
     samples_backup = rewrite_samples(samples, applied, kin)
     print(f"손눈 사진 기록 고침. 원본 백업: {samples_backup}")
     print("\n손눈 다시 계산:")
-    C.compute(samples_dir)
+    C.compute(samples_dir, check_zero=False)
     print(
         "\n확인할 것\n"
         "  1. 펜던트 Connect → HOME: 반듯한 L자인지\n"

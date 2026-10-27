@@ -9,9 +9,9 @@
            Viewer·roi_cloud 끄고, 로봇은 책상에 평평히.
   python vision/handeye/compute.py --align-desk --desk-plane=a,b,c,d
            카메라 없이. Open3D --desk-plane (베이스) 값을 그대로.
-  python vision/handeye/compute.py --fix-zero
-           손눈 사진으로 팔 관절 0° 오차(캘리브 L자 틀어짐)를 찾아
-           팔로워 캘리브와 손눈 결과를 함께 고친다 (vision/handeye/zero_fix.py). 펜던트는 끈다.
+  손눈 계산이 끝나면 같은 사진으로 팔 관절 0° 오차(캘리브 L자 틀어짐)를 점검하고,
+  고칠 만하면 물어본 뒤 팔로워 캘리브와 손눈 결과를 함께 고친다 (vision/handeye/zero_fix.py).
+  고칠 때는 펜던트를 끈다. 점검을 빼려면 --no-fix-zero, 점검 · 고치기만 하려면 --fix-zero.
 """
 
 from __future__ import annotations
@@ -215,15 +215,16 @@ class Sample:
     meta: dict
 
 
-def load_samples(samples_dir: Path) -> list[Sample]:
+def load_samples(samples_dir: Path, *, quiet: bool = False) -> list[Sample]:
     """사진마다 ChArUco 보드를 찾고 PnP 로 카메라 기준 보드 자세를 구한다.
 
-    문제 있는 사진은 이유를 출력하고 건너뛴다.
+    문제 있는 사진은 이유를 출력하고 건너뛴다. quiet 이면 아무것도 출력하지 않는다.
     """
+    say = (lambda *a, **k: None) if quiet else print
     K_raw, dist_raw, _ = load_intrinsics()
     # 카메라를 180° 돌려 달았으므로 렌즈 중심 (cx, cy) 도 돌린 값을 쓴다.
     K, dist = intrinsics_for_rotate180(K_raw, dist_raw, FRAME_WIDTH, FRAME_HEIGHT)
-    print(
+    say(
         f"PnP 180°  cx={K[0, 2]:.2f} cy={K[1, 2]:.2f}  "
         f"(공장 {K_raw[0, 2]:.2f},{K_raw[1, 2]:.2f})"
     )
@@ -232,31 +233,31 @@ def load_samples(samples_dir: Path) -> list[Sample]:
     for png in list_samples(samples_dir):
         meta_path = png.with_suffix(".json")
         if not meta_path.is_file():
-            print("skip", png.name, "json 없음")
+            say("skip", png.name, "json 없음")
             continue
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if not meta.get("rotate_180"):
-            print("skip", png.name, "이전 샘플(회전 없음). 지우고 다시 찍으세요.")
+            say("skip", png.name, "이전 샘플(회전 없음). 지우고 다시 찍으세요.")
             continue
         frame = cv2.imread(str(png))
         if frame is None:
-            print("skip", png.name, "이미지 없음")
+            say("skip", png.name, "이미지 없음")
             continue
         det = detect_board(frame, board)
         if not det.ok:
-            print("skip", png.name, "corners", det.n_corners)
+            say("skip", png.name, "corners", det.n_corners)
             continue
         obj, img = match_points(det, board)
         if obj is None:
-            print("skip", png.name, "match")
+            say("skip", png.name, "match")
             continue
         solved = robust_pnp(obj, img, K, dist)
         if solved is None:
-            print("skip", png.name, "RANSAC PnP")
+            say("skip", png.name, "RANSAC PnP")
             continue
         rvec, tvec, n_inlier, rms = solved
         if rms > PNP_RMS_MAX_PX:
-            print("skip", png.name, f"reprojection RMS={rms:.3f}px")
+            say("skip", png.name, f"reprojection RMS={rms:.3f}px")
             continue
         out.append(
             Sample(
@@ -269,11 +270,11 @@ def load_samples(samples_dir: Path) -> list[Sample]:
                 meta=meta,
             )
         )
-        print(f"ok {png.name} corners={det.n_corners} inliers={n_inlier} rms={rms:.3f}px")
+        say(f"ok {png.name} corners={det.n_corners} inliers={n_inlier} rms={rms:.3f}px")
     return out
 
 
-def compute(samples_dir: Path) -> np.ndarray:
+def compute(samples_dir: Path, *, check_zero: bool = True) -> np.ndarray:
     """저장된 샘플로 T_base_cam 을 구해 저장하고 돌려준다.
 
     순서:
@@ -429,9 +430,11 @@ def compute(samples_dir: Path) -> np.ndarray:
     }
     dest = save_handeye(payload)
     print("저장", dest)
-    if float(t_error.mean()) > 2.0 or float(r_error.mean()) > 1.0:
-        print("오차가 큽니다. 팔 캘리브의 L자가 틀어졌을 수 있습니다. 펜던트를 끄고:")
-        print("  python vision/handeye/compute.py --fix-zero")
+    if check_zero:
+        # 팔 캘리브 L자가 틀어졌는지 같은 사진으로 점검한다. 고칠 만하면 물어본다 (zero_fix.py).
+        from vision.handeye.zero_fix import run as check_joint_zero
+
+        check_joint_zero(samples_dir, after_compute=True)
     print("책상이 로봇 XY와 안 맞으면 (빈 책상, Viewer 끄고):")
     print("  python vision/handeye/compute.py --align-desk")
     return T_base_cam
@@ -580,7 +583,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="손눈 사진으로 팔 관절 0° 오차를 찾아 팔로워 캘리브와 손눈 결과를 고침",
     )
-    p.add_argument("--yes", action="store_true", help="--fix-zero 에서 확인을 묻지 않음")
+    p.add_argument("--no-fix-zero", action="store_true", help="손눈 계산 뒤 팔 관절 0° 점검을 하지 않음")
+    p.add_argument("--yes", action="store_true", help="팔 관절 0° 를 고칠 때 확인을 묻지 않음")
     return p.parse_args()
 
 
@@ -604,7 +608,14 @@ def main() -> None:
         raise SystemExit(
             f"샘플 {n}장. 최소 {MIN_SOLVE}장. 먼저 python vision/handeye/capture.py"
         )
-    compute(samples_dir)
+    if args.no_fix_zero:
+        compute(samples_dir, check_zero=False)
+        return
+    compute(samples_dir, check_zero=not args.yes)
+    if args.yes:
+        from vision.handeye.zero_fix import run as check_joint_zero
+
+        check_joint_zero(samples_dir, yes=True, after_compute=True)
 
 
 if __name__ == "__main__":
