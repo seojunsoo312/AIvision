@@ -75,11 +75,11 @@ def detect_board(gray, board: cv2.aruco.CharucoBoard | None = None) -> DetectedB
 def draw_detection(bgr, det: DetectedBoard) -> np.ndarray:
     vis = bgr.copy()
     if det.marker_ids is not None:
-        cv2.aruco.drawDetectedMarkers(vis, det.marker_corners, det.marker_ids)
+        # 번호(id=…) 글자는 마커·모서리마다 붙어 서로 겹치므로 그리지 않는다. 테두리와 모서리 점만.
+        cv2.aruco.drawDetectedMarkers(vis, det.marker_corners)
     if det.n_corners > 0:
         cc = np.asarray(det.charuco_corners, dtype=np.float32).reshape(-1, 1, 2)
-        ci = np.asarray(det.charuco_ids, dtype=np.int32).reshape(-1, 1)
-        cv2.aruco.drawDetectedCornersCharuco(vis, cc, ci)
+        cv2.aruco.drawDetectedCornersCharuco(vis, cc)
     color = (0, 255, 0) if det.ok else (0, 0, 255)
     expect = (SQUARES_X - 1) * (SQUARES_Y - 1)
     cv2.putText(
@@ -89,7 +89,7 @@ def draw_detection(bgr, det: DetectedBoard) -> np.ndarray:
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         color,
-        2,
+        1,
         cv2.LINE_AA,
     )
     return vis

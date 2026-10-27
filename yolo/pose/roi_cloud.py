@@ -526,7 +526,7 @@ def main() -> None:
             bgr, depth = cam.grab(timeout_ms=800)
             if bgr is None or depth is None:
                 vis = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(vis, "no RGB-D", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                cv2.putText(vis, "no RGB-D", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1, cv2.LINE_AA)
                 cv2.imshow(WIN, vis)
                 filters.sync()
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -703,7 +703,7 @@ def main() -> None:
                     cv2.rectangle(
                         bgr, (x1, y1), (x2, y2), pose_color, 2 if i == chosen else 1, cv2.LINE_AA
                     )
-                put_text(bgr, pose, (tag_x, tag_y), 0.6, pose_color, 2)
+                put_text(bgr, pose, (tag_x, tag_y), 0.6, pose_color, 1)
 
             ztxt = ""
             if len(last_xyz):
@@ -733,7 +733,7 @@ def main() -> None:
             )
             if args.cad:
                 place_font = 0.58
-                place_thick = 2
+                place_thick = 1
                 if cad_pose is not None:
                     on = cad_pose.get("scene_frac")
                     vis = cad_pose.get("vis_frac")

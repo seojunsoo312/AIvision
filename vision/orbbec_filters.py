@@ -346,7 +346,7 @@ class OrbbecFilterPanel:
             nonlocal y
             y1 = y + self.HEADER_H
             cv2.rectangle(img, (0, y), (self.W, y1), (40, 40, 40), -1)
-            self._text(img, title, (self.PAD, y + 30), (250, 250, 250), 0.62, 2)
+            self._text(img, title, (self.PAD, y + 30), (250, 250, 250), 0.62, 1)
             if note:
                 self._text(img, note, (self.PAD + 210, y + 30), (160, 160, 160), 0.45)
             if key is not None:

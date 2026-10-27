@@ -213,7 +213,7 @@ def capture_loop(samples_dir: Path) -> None:
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
                     (0, 0, 255),
-                    2,
+                    1,
                     cv2.LINE_AA,
                 )
             else:
@@ -225,7 +225,7 @@ def capture_loop(samples_dir: Path) -> None:
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.55,
                     (0, 255, 0) if det.ok else (0, 0, 255),
-                    2,
+                    1,
                     cv2.LINE_AA,
                 )
             cv2.imshow(WIN, vis)

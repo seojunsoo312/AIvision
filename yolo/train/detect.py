@@ -116,7 +116,7 @@ def main() -> None:
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 255, 0),
-                2,
+                1,
                 cv2.LINE_AA,
             )
             cv2.imshow(WIN, vis)
