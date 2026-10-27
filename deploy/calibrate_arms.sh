@@ -15,12 +15,23 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 which="${1:-all}"
 case "$which" in all|follower|leader) ;; *) echo "인자는 all, follower, leader 중 하나"; exit 1;; esac
 
+# 펜던트가 켜져 있으면 0. 「AIvision 터미널」 pendant 칸에서는 `python main.py` 로 켜서
+# 명령줄에 pendant/ 가 없으므로, 그 프로세스의 작업 폴더도 본다.
+pendant_running() {
+  local pid
+  pgrep -f "pendant/main.py" >/dev/null && return 0
+  for pid in $(pgrep -f "main.py"); do
+    [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$PROJECT_DIR/pendant" ] && return 0
+  done
+  return 1
+}
+
 CAL=""
 for d in "$HOME/miniforge3" "$HOME/miniconda3"; do
   [ -x "$d/envs/AIvision/bin/lerobot-calibrate" ] && CAL="$d/envs/AIvision/bin/lerobot-calibrate" && break
 done
 [ -n "$CAL" ] || { echo "AIvision 환경의 lerobot-calibrate 가 없습니다. 먼저 bash deploy/setup_jetson.sh"; exit 1; }
-if pgrep -f "pendant/main.py" >/dev/null; then
+if pendant_running; then
   echo "펜던트가 켜져 있습니다. 펜던트 창을 닫고 다시 실행하세요."; exit 1
 fi
 

@@ -48,10 +48,21 @@ runlog() {  # 실행 기록 (motion/runlog.py 와 같은 파일 · 같은 모양
 cd "$PROJECT_DIR" || die "프로젝트 폴더가 없습니다: $PROJECT_DIR"
 git rev-parse --git-dir >/dev/null 2>&1 || die "$PROJECT_DIR 는 git 저장소가 아닙니다."
 
+# 펜던트가 켜져 있으면 0. 「AIvision 터미널」 pendant 칸에서는 `python main.py` 로 켜서
+# 명령줄에 pendant/ 가 없으므로, 그 프로세스의 작업 폴더도 본다.
+pendant_running() {
+  local pid
+  pgrep -f "pendant/main.py" >/dev/null && return 0
+  for pid in $(pgrep -f "main.py"); do
+    [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$PROJECT_DIR/pendant" ] && return 0
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------- 1. 켜진 프로그램
 say "1. 켜진 프로그램 확인"
 busy=""
-pgrep -f "pendant/main.py" >/dev/null && busy="$busy 펜던트"
+pendant_running && busy="$busy 펜던트"
 pgrep -f "roi_cloud.py" >/dev/null && busy="$busy 카메라창"
 pgrep -f "jupyter" >/dev/null && busy="$busy 노트북(Jupyter)"
 [ -z "$busy" ] || die "먼저 닫아 주세요:$busy  (켜진 채 바꾸면 저장할 때 옛 내용으로 덮어쓸 수 있습니다)"

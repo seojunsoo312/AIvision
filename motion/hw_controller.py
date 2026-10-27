@@ -276,3 +276,118 @@ class Hardware:
             action[f"{motor}.pos"] = float(user[urdf_name]) - self._enter_off.get(urdf_name, 0.0)
         action["gripper.pos"] = grip_user_to_100(float(user[GRIPPER_JOINT]))
         return action
+
+
+# ---------------------------------------------------------------- 관절 0° 옮기기 (손눈 보정)
+
+
+def port_users(port: str = DEFAULT_PORT) -> list[str]:
+    """이 시리얼 포트를 열고 있는 프로세스 (pid 명령줄). 펜던트가 켜져 있는지 볼 때 쓴다."""
+    import os
+
+    try:
+        target = os.path.realpath(port)
+    except OSError:
+        return []
+    users = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd in os.listdir(fd_dir):
+                if os.path.realpath(os.path.join(fd_dir, fd)) == target:
+                    cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="ignore")
+                    users.append(f"{pid} {cmd.strip()}")
+                    break
+        except OSError:
+            continue
+    return users
+
+
+def shift_follower_zero(
+    dq_deg: dict[str, float],
+    *,
+    port: str = DEFAULT_PORT,
+    robot_id: str = DEFAULT_ROBOT_ID,
+    calibration_dir: Path | None = None,
+) -> tuple[dict[str, float], Path]:
+    """팔로워 관절의 0° 를 dq 만큼 옮긴다: 지금 보고 각도 + dq 가 새 보고 각도가 된다.
+
+    「L자를 그만큼 더 정확히 맞춰 캘리브했다」와 같다. 토크를 끈 채 모터의 Homing_Offset 과
+    위치 한계를 쓰고, 다시 읽어 확인한 뒤 캘리브 파일을 저장한다. 원래 파일은 옆에 백업한다.
+
+    dq_deg: URDF 관절 이름(S1..S6) → 도. 실제로 옮긴 각도(정수 카운트 단위)와 백업 경로를 돌려준다.
+    """
+    import shutil
+    import time
+
+    from lerobot.motors import MotorCalibration
+    from lerobot.robots.so_follower import SO101FollowerConfig, SOFollower
+
+    busy = port_users(port)
+    if busy:
+        raise RuntimeError("팔로워를 다른 프로그램이 쓰고 있습니다. 먼저 닫으세요:\n  " + "\n  ".join(busy))
+    robot = SOFollower(
+        SO101FollowerConfig(
+            port=port, id=robot_id, dof_mode=7, cameras={},
+            calibration_dir=resolve_calibration_dir(calibration_dir, robot_id),
+        )
+    )
+    if not robot.calibration:
+        raise RuntimeError(f"팔 캘리브 파일이 없습니다: {robot.calibration_fpath}")
+    k = 360.0 / (STS3215_RESOLUTION - 1)
+    max_res = STS3215_RESOLUTION - 1
+    counts = {LEROBOT_FROM_URDF[j]: int(round(float(v) / k)) for j, v in dq_deg.items()}
+    counts = {m: d for m, d in counts.items() if d != 0}
+    if not counts:
+        return {}, Path(robot.calibration_fpath)
+
+    new = dict(robot.calibration)
+    for motor, d in counts.items():
+        c = robot.calibration[motor]
+        if c.range_min == 0 and c.range_max == max_res:
+            # 끝없이 도는 관절 (elbow_roll): 범위는 0~4095 그대로, 기준만 옮긴다.
+            lo, hi = 0, max_res
+        else:
+            lo, hi = max(c.range_min + d, 0), min(c.range_max + d, max_res)
+        off = c.homing_offset - d
+        if abs(off) > 2047:
+            raise RuntimeError(f"{motor}: 옮긴 기준값 {off} 이 ±2047 을 넘습니다. 그 팔은 캘리브를 다시 하세요.")
+        new[motor] = MotorCalibration(id=c.id, drive_mode=c.drive_mode, homing_offset=off, range_min=lo, range_max=hi)
+
+    path = Path(robot.calibration_fpath)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    backup = path.with_name(f"{path.name}.before_zero_fix.{stamp}")
+    n = 1
+    while backup.exists():  # 같은 초에 두 번 고쳐도 먼저 백업을 덮어쓰지 않는다.
+        n += 1
+        backup = path.with_name(f"{path.name}.before_zero_fix.{stamp}_{n}")
+    shutil.copy2(path, backup)
+    bus = robot.bus
+    bus.connect()
+    try:
+        bus.disable_torque()
+        motors = list(counts)
+        before = bus.sync_read("Present_Position", motors, normalize=False)
+        bus.write_calibration(new)
+        time.sleep(0.1)
+        after = bus.sync_read("Present_Position", motors, normalize=False)
+        stored = bus.read_calibration()
+    finally:
+        bus.disconnect(disable_torque=True)
+    bad = [
+        m for m in motors
+        if abs((after[m] - before[m]) - counts[m]) > 3
+        or (stored[m].homing_offset, stored[m].range_min, stored[m].range_max)
+        != (new[m].homing_offset, new[m].range_min, new[m].range_max)
+    ]
+    if bad:
+        raise RuntimeError(
+            f"모터에 쓴 값이 맞지 않습니다: {bad}. 캘리브 파일은 바꾸지 않았습니다.\n"
+            "  bash ~/AIvision/deploy/calibrate_arms.sh follower 에서 Enter 만 눌러 파일 값을 다시 쓰세요."
+        )
+    robot.calibration = new
+    robot._save_calibration()
+    applied = {j: counts[LEROBOT_FROM_URDF[j]] * k for j in dq_deg if LEROBOT_FROM_URDF[j] in counts}
+    return applied, backup

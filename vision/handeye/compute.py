@@ -9,6 +9,9 @@
            Viewer·roi_cloud 끄고, 로봇은 책상에 평평히.
   python vision/handeye/compute.py --align-desk --desk-plane=a,b,c,d
            카메라 없이. Open3D --desk-plane (베이스) 값을 그대로.
+  python vision/handeye/compute.py --fix-zero
+           손눈 사진으로 팔 관절 0° 오차(캘리브 L자 틀어짐)를 찾아
+           팔로워 캘리브와 손눈 결과를 함께 고친다 (vision/handeye/zero_fix.py). 펜던트는 끈다.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -199,17 +203,24 @@ def robust_limit(values, floor):
     return max(floor, med + 3.0 * max(mad, 1e-6))
 
 
-def compute(samples_dir: Path) -> np.ndarray:
-    """저장된 샘플로 T_base_cam 을 구해 저장하고 돌려준다.
+@dataclass
+class Sample:
+    """손눈 사진 한 장: 카메라가 본 보드 자세, 그때 팔이 보고한 TCP 자세, 기록 json."""
 
-    순서:
-    1. 사진마다 ChArUco 보드를 찾고 PnP 로 카메라 기준 보드 자세를 구한다.
-    2. 전체로 한 번 풀고, 잔차가 큰 사진을 이상치로 뺀다.
-    3. 남은 사진으로 OpenCV 방법 5가지를 모두 풀어 잔차가 가장 작은 것을 고른다.
-    4. 한 장씩 빼고 다시 풀어서 (leave-one-out) 결과가 얼마나 흔들리는지 본다.
-    5. 결과와 품질 지표를 JSON 으로 저장한다.
+    name: str
+    json_path: Path
+    T_cam_board: np.ndarray
+    T_base_tcp: np.ndarray
+    rms_px: float
+    meta: dict
+
+
+def load_samples(samples_dir: Path) -> list[Sample]:
+    """사진마다 ChArUco 보드를 찾고 PnP 로 카메라 기준 보드 자세를 구한다.
+
+    문제 있는 사진은 이유를 출력하고 건너뛴다.
     """
-    K_raw, dist_raw, k_path = load_intrinsics()
+    K_raw, dist_raw, _ = load_intrinsics()
     # 카메라를 180° 돌려 달았으므로 렌즈 중심 (cx, cy) 도 돌린 값을 쓴다.
     K, dist = intrinsics_for_rotate180(K_raw, dist_raw, FRAME_WIDTH, FRAME_HEIGHT)
     print(
@@ -217,12 +228,7 @@ def compute(samples_dir: Path) -> np.ndarray:
         f"(공장 {K_raw[0, 2]:.2f},{K_raw[1, 2]:.2f})"
     )
     board = make_board()
-    names = []
-    T_cam_board_list = []
-    T_base_tcp_list = []
-    reprojection_rms = []
-
-    # 1. 사진마다 보드 자세를 구한다. 문제 있는 사진은 이유를 출력하고 건너뛴다.
+    out: list[Sample] = []
     for png in list_samples(samples_dir):
         meta_path = png.with_suffix(".json")
         if not meta_path.is_file():
@@ -252,14 +258,37 @@ def compute(samples_dir: Path) -> np.ndarray:
         if rms > PNP_RMS_MAX_PX:
             print("skip", png.name, f"reprojection RMS={rms:.3f}px")
             continue
-        T_cam_board_list.append(rt_to_T(cv2.Rodrigues(rvec)[0], tvec))
-        # 예전 좌표계로 저장된 샘플도 지금 베이스 좌표로 바꿔서 쓴다.
-        T_base_tcp_list.append(
-            T_user_from_stored(np.asarray(meta["T_base_tcp"], dtype=float), meta.get("base_frame"))
+        out.append(
+            Sample(
+                name=png.name,
+                json_path=meta_path,
+                T_cam_board=rt_to_T(cv2.Rodrigues(rvec)[0], tvec),
+                # 예전 좌표계로 저장된 샘플도 지금 베이스 좌표로 바꿔서 쓴다.
+                T_base_tcp=T_user_from_stored(np.asarray(meta["T_base_tcp"], dtype=float), meta.get("base_frame")),
+                rms_px=float(rms),
+                meta=meta,
+            )
         )
-        reprojection_rms.append(rms)
-        names.append(png.name)
         print(f"ok {png.name} corners={det.n_corners} inliers={n_inlier} rms={rms:.3f}px")
+    return out
+
+
+def compute(samples_dir: Path) -> np.ndarray:
+    """저장된 샘플로 T_base_cam 을 구해 저장하고 돌려준다.
+
+    순서:
+    1. 사진마다 ChArUco 보드를 찾고 PnP 로 카메라 기준 보드 자세를 구한다 (load_samples).
+    2. 전체로 한 번 풀고, 잔차가 큰 사진을 이상치로 뺀다.
+    3. 남은 사진으로 OpenCV 방법 5가지를 모두 풀어 잔차가 가장 작은 것을 고른다.
+    4. 한 장씩 빼고 다시 풀어서 (leave-one-out) 결과가 얼마나 흔들리는지 본다.
+    5. 결과와 품질 지표를 JSON 으로 저장한다.
+    """
+    _, _, k_path = load_intrinsics()
+    samples = load_samples(samples_dir)
+    names = [s.name for s in samples]
+    T_cam_board_list = [s.T_cam_board for s in samples]
+    T_base_tcp_list = [s.T_base_tcp for s in samples]
+    reprojection_rms = [s.rms_px for s in samples]
 
     n_detected = len(names)
     if n_detected < MIN_SOLVE:
@@ -400,6 +429,9 @@ def compute(samples_dir: Path) -> np.ndarray:
     }
     dest = save_handeye(payload)
     print("저장", dest)
+    if float(t_error.mean()) > 2.0 or float(r_error.mean()) > 1.0:
+        print("오차가 큽니다. 팔 캘리브의 L자가 틀어졌을 수 있습니다. 펜던트를 끄고:")
+        print("  python vision/handeye/compute.py --fix-zero")
     print("책상이 로봇 XY와 안 맞으면 (빈 책상, Viewer 끄고):")
     print("  python vision/handeye/compute.py --align-desk")
     return T_base_cam
@@ -543,6 +575,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="베이스 프레임 ax,by,cz,d. 있으면 카메라 없이 --align-desk",
     )
+    p.add_argument(
+        "--fix-zero",
+        action="store_true",
+        help="손눈 사진으로 팔 관절 0° 오차를 찾아 팔로워 캘리브와 손눈 결과를 고침",
+    )
+    p.add_argument("--yes", action="store_true", help="--fix-zero 에서 확인을 묻지 않음")
     return p.parse_args()
 
 
@@ -554,6 +592,11 @@ def main() -> None:
     if args.align_desk:
         plane = _parse_plane4(args.desk_plane) if args.desk_plane else None
         align_desk(plane)
+        return
+    if args.fix_zero:
+        from vision.handeye.zero_fix import run as fix_zero
+
+        fix_zero(samples_dir, yes=args.yes)
         return
 
     n = len(list_samples(samples_dir))

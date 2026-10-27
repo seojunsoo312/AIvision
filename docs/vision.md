@@ -15,6 +15,7 @@ python vision/handeye/vision_test.py       # 화면 확인
 python vision/handeye/get_intrinsic.py     # 카메라 내부 값 저장
 python vision/handeye/capture.py           # 손눈 샘플 저장
 python vision/handeye/compute.py           # 카메라 위치 계산
+python vision/handeye/compute.py --fix-zero  # 오차가 크면: 팔 캘리브 L자 틀어짐까지 찾아 함께 고침 (펜던트 끄고)
 python vision/handeye/compare_pnp_depth.py # 보드 거리와 뎁스 거리 비교
 ```
 
@@ -34,6 +35,7 @@ python vision/handeye/compare_pnp_depth.py # 보드 거리와 뎁스 거리 비�
 | `handeye/get_intrinsic.py` | 공장 내부 값을 `calib_data/intrinsics.json`에 저장합니다. |
 | `handeye/capture.py` | 펜던트 팔 자세와 보드 사진을 `calib_data/handeye_tcp/`에 저장합니다. |
 | `handeye/compute.py` | 저장한 샘플로 카메라의 로봇 기준 위치(`eye_to_hand.json`)를 계산합니다. |
+| `handeye/zero_fix.py` | `compute.py --fix-zero`. 손눈 사진으로 팔 관절 0°(캘리브 L자) 오차를 찾아 팔로워 캘리브와 손눈 결과를 함께 고칩니다. 사진을 절반씩 나눠 푼 값이 다르거나 오차가 이상하면 적용하지 않습니다. 고치기 전 캘리브 파일과 사진 기록은 백업합니다. |
 | `handeye/compare_pnp_depth.py` | 보드로 잰 거리와 뎁스 거리가 같은지 확인합니다. |
 | `calib_data/` | 내부 값, 손눈 결과, 촬영 샘플이 들어 있는 폴더입니다. 보드마다 다르므로 git에 없습니다. |
 
