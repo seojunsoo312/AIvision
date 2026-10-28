@@ -77,6 +77,12 @@ class BuildStepsTest(unittest.TestCase):
         R1 = rpy_deg_to_rotmat(*(float(v) for v in rpy_tcp_rx_parallel_base_x(rpy)))
         np.testing.assert_allclose(R1, R0, atol=1e-9)
 
+    def test_drop_wrist_can_be_given(self):
+        # 반복 데모: 집을 때 손목 그대로 놓으면 물체 자세가 바뀌지 않는다.
+        for st in _steps(drop_rpy_deg=G_RPY):
+            if st.name in ("드롭 XY", "하강", "놓기 리프트"):
+                np.testing.assert_allclose(st.rpy_deg, G_RPY)
+
     def test_grasp_z_is_height_before_closing(self):
         self.assertAlmostEqual(_grasp_z(_steps()), G[2])
 

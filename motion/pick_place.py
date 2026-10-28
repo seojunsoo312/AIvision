@@ -300,13 +300,22 @@ def build_pick_place_steps(
     gripper_open_100: float = GRIPPER_OPEN_100,
     pick_lift_mm: float = PICK_LIFT_MM,
     place_approach_mm: float = PLACE_APPROACH_MM,
+    drop_rpy_deg: np.ndarray | None = None,
 ) -> list[PickPlaceStep]:
-    """직선 픽앤플레이스. 놓는 Z 는 집기 TCP 에서, 놓는 RPY 는 TCP Rx ∥ 베이스 X."""
+    """직선 픽앤플레이스. 놓는 Z 는 집기 TCP 에서, 놓는 RPY 는 TCP Rx ∥ 베이스 X.
+
+    drop_rpy_deg 를 주면 놓을 때 손목을 그 자세로 한다. 집을 때와 같은 값을 주면 물체가
+    집기 전과 같은 자세로 놓인다 (반복 데모처럼 놓은 물체를 다시 집을 때).
+    """
     p_xyz = np.asarray(p_xyz_mm, dtype=float).reshape(3)
     g_xyz = np.asarray(g_xyz_mm, dtype=float).reshape(3)
     p_rpy = np.asarray(p_rpy_deg, dtype=float).reshape(3)
     g_rpy = np.asarray(g_rpy_deg, dtype=float).reshape(3)
-    drop_rpy = rpy_tcp_rx_parallel_base_x(g_rpy)
+    drop_rpy = (
+        rpy_tcp_rx_parallel_base_x(g_rpy)
+        if drop_rpy_deg is None
+        else np.asarray(drop_rpy_deg, dtype=float).reshape(3)
+    )
     drop_xy = np.asarray(drop_xy_mm, dtype=float).reshape(2)
     z_g = float(g_xyz[2])
     z_lift = z_g + float(pick_lift_mm)
