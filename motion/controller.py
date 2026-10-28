@@ -70,6 +70,9 @@ GOTO_MIN_S = 0.2
 GOTO_MAX_S = 30.0
 GOTO_SETTLE_POS_M = 0.0008  # 0.8 mm — EE go-to 는 TCP 가 목표에 닿을 때까지 IK 를 계속한다
 GOTO_SETTLE_MAX_S = 2.5
+# 이동 도중 속도를 바꿀 때 진행 배율의 한계 (속도 % 범위 10–100 이면 실제로는 0.2–5 안).
+GOTO_RATE_MIN = 0.1
+GOTO_RATE_MAX = 10.0
 GOTO_SETTLE_IK_LOOPS = 4
 # EE go-to: TCP 를 직선으로 옮기면 기둥(L1 = J1–J2)에 부딪힐 때 먼저 위로 올린다.
 # 높이는 길이 열리는 가장 낮은 경유 높이. 막히면 MAX 쪽으로 한 단계씩 올린다.
@@ -466,6 +469,7 @@ class Controller:
                 for leg in legs:
                     leg["duration_s"] = float(leg["duration_s"]) * scale
                     leg["n"] = max(int(leg["duration_s"] * FPS), 1)
+                    leg["auto"] = False  # 시간을 정해 줬으니 속도 슬라이더를 따르지 않는다
                 first, rest = legs[0], legs[1:]
             self._goto = self._ee_goto_from_leg(
                 first,
@@ -495,6 +499,7 @@ class Controller:
                 self._goto = None
                 self._fault = ALREADY_AT_TARGET
                 return 0.0
+            auto = duration_s is None
             if duration_s is None:
                 duration_s = self._joint_goto_duration_unlocked(q0, q1)
             duration_s = float(np.clip(duration_s, GOTO_MIN_S, GOTO_MAX_S))
@@ -504,6 +509,8 @@ class Controller:
                 "n": max(int(duration_s * FPS), 1),
                 "q0": q0,
                 "q1": q1,
+                "auto": auto,
+                "dur_ref": duration_s,
             }
             self._fault = ""
         return duration_s
@@ -692,6 +699,9 @@ class Controller:
             "n": max(int(duration_s * FPS), 1),
             "duration_s": duration_s,
             "lift_seg": bool(lift_seg),
+            "lin_mps": lin_mps,
+            "rot_deg_s": rot_deg_s,
+            "auto": True,
         }
 
     def _ee_goto_from_leg(
@@ -716,7 +726,28 @@ class Controller:
             "final_R": np.asarray(final_R, dtype=float).copy(),
             "lifted": bool(lifted),
             "lift_seg": bool(leg.get("lift_seg")),
+            "auto": bool(leg.get("auto", False)),
+            "dur_ref": float(leg.get("duration_s", 0.0)),
+            "lin_mps": leg.get("lin_mps"),
+            "rot_deg_s": leg.get("rot_deg_s"),
         }
+
+    def _goto_rate_unlocked(self, g: dict) -> float:
+        """속도 슬라이더를 이동 도중에 바꾸면 남은 구간을 새 속도로 간다.
+
+        시작할 때 잡은 시간 ÷ 지금 속도로 다시 잰 시간. 1 이면 그대로, 2 면 두 배 빠르게.
+        시간이나 속도를 직접 정해 준 이동 (auto=False) 은 늘 1.
+        """
+        if not g.get("auto") or g.get("dur_ref", 0.0) <= 0.0:
+            return 1.0
+        if g["kind"] == "joint":
+            now = self._joint_goto_duration_unlocked(g["q0"], g["q1"])
+        else:
+            now = self._ee_goto_duration_unlocked(
+                g["xyz0"], g["R0"], g["xyz1"], g["R1"], lin_mps=g.get("lin_mps"), rot_deg_s=g.get("rot_deg_s")
+            )
+        now = float(np.clip(now, GOTO_MIN_S, GOTO_MAX_S))
+        return float(np.clip(float(g["dur_ref"]) / now, GOTO_RATE_MIN, GOTO_RATE_MAX))
 
     def _joint_goto_duration_unlocked(self, q0: np.ndarray, q1: np.ndarray) -> float:
         t_max = GOTO_MIN_S
@@ -762,6 +793,12 @@ class Controller:
             err_xyz_mm=err_xyz,
             holding=holding,
         )
+
+    def measured_joints_deg(self) -> dict[str, float]:
+        """실기 엔코더로 잰 관절 각도. 실측이 없으면 (가상) 명령 자세."""
+        with self._lock:
+            q = self._q_meas.copy() if self._q_meas is not None else self._q.copy()
+        return self._kin.joints_deg(q)
 
     def handeye_payload(self) -> dict:
         """프로젝트 베이스(+X 앞)에서 잰 실측 TCP. 없으면 명령 자세를 쓴다."""
@@ -943,7 +980,7 @@ class Controller:
             q = self._q
             if g is None:
                 return
-            i = g["i"] + 1
+            i = g["i"] + self._goto_rate_unlocked(g)
             a = min(i / g["n"], 1.0)
             kind = g["kind"]
             n = g["n"]
