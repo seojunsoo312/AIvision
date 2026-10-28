@@ -216,9 +216,10 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------- 바탕화면 아이콘
-say "바탕화면 아이콘 (AIvision 업데이트 · AIvision 터미널)"
+say "바탕화면 아이콘 (AIvision 업데이트 · AIvision 터미널 · AIvision 런처)"
 bash "$PROJECT_DIR/deploy/install_update_icon.sh" || warn "아이콘을 만들지 못했습니다. 나중에 bash deploy/install_update_icon.sh"
 bash "$PROJECT_DIR/deploy/install_terminal_icon.sh" || warn "터미널 아이콘을 만들지 못했습니다. 나중에 bash deploy/install_terminal_icon.sh"
+bash "$PROJECT_DIR/deploy/install_launcher_icon.sh" || warn "런처 아이콘을 만들지 못했습니다. 나중에 bash deploy/install_launcher_icon.sh"
 
 # ---------------------------------------------------------------- 정리
 say "캐시 정리 (복제할 SSD 용량을 줄인다)"

@@ -5,11 +5,12 @@
 #   bash ~/AIvision/deploy/update_board.sh
 #
 # 하는 일
-#   1. 펜던트 · 카메라 창 · 노트북(Jupyter)이 켜져 있으면 멈춘다 (켜진 채 바꾸면 꼬인다).
+#   1. 펜던트 · 런처 · 카메라 창 · 노트북(Jupyter)이 켜져 있으면 멈춘다 (켜진 채 바꾸면 꼬인다).
 #   2. 학생이 고친 파일을 바탕화면 AIvision_백업/날짜_시각/ 에 복사해 둔다.
 #   3. 저장소를 GitHub 과 똑같이 맞춘다 (git reset --hard). 새로 만든 파일, 캘리브,
 #      가중치, 로그처럼 git 이 모르는 파일은 건드리지 않는다.
 #   3-1. 바탕화면 「실행 코드.md」 · 「노트북 실습.md」를 docs/ 의 것으로 맞춘다 (고친 것은 백업 폴더에 보관).
+#   3-2. 바탕화면 아이콘 (AIvision 런처) 을 만들거나 최신으로 맞춘다.
 #   4. 설치 목록(docs/requirements.txt, setup_jetson.sh)이 바뀌었으면 setup_jetson.sh 를 다시 돌린다.
 #   5. check_board.py 로 점검하고, 버전과 결과를 한 줄로 보여 준다.
 #
@@ -63,6 +64,7 @@ pendant_running() {
 say "1. 켜진 프로그램 확인"
 busy=""
 pendant_running && busy="$busy 펜던트"
+pgrep -f "launcher/(launcher|standby|repeat_demo|teleop).py" >/dev/null && busy="$busy 런처"
 pgrep -f "roi_cloud.py" >/dev/null && busy="$busy 카메라창"
 pgrep -f "jupyter" >/dev/null && busy="$busy 노트북(Jupyter)"
 [ -z "$busy" ] || die "먼저 닫아 주세요:$busy  (켜진 채 바꾸면 저장할 때 옛 내용으로 덮어쓸 수 있습니다)"
@@ -123,6 +125,12 @@ for DOC_NAME in "실행 코드.md" "노트북 실습.md"; do
   fi
   cp "$DOC_SRC" "$DOC_DST" && ok "바탕화면 「$DOC_NAME」 최신으로"
 done
+
+# 바탕화면 아이콘. 여러 번 실행해도 같은 아이콘 하나 (경로가 바뀌어도 맞춰진다).
+if [ -f "$PROJECT_DIR/deploy/install_launcher_icon.sh" ]; then
+  bash "$PROJECT_DIR/deploy/install_launcher_icon.sh" >/dev/null 2>&1 && ok "바탕화면 「AIvision 런처」 아이콘" \
+    || warn "런처 아이콘을 만들지 못했습니다. 나중에 bash deploy/install_launcher_icon.sh"
+fi
 
 # ---------------------------------------------------------------- 5. 설치 다시 할지
 say "5. 설치 목록 확인"
