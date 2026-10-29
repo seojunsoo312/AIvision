@@ -43,8 +43,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
-from cad.model import approach_mm, bounds_mm  # noqa: E402
+from cad.model import bounds_mm  # noqa: E402
 from common import SPEED_DEFAULT_PCT, Warm, apply_speed, close_windows, open_viz_window, prepare  # noqa: E402
+from demo_settings import CYCLES, SPOT_KEYS, SPOTS, load_demo_settings  # noqa: E402
 from motion import runlog  # noqa: E402
 from motion.controller import ALREADY_AT_TARGET, Controller  # noqa: E402
 from motion.grasp import PlacePose, T_to_xyzrpy, compute_auto_pre  # noqa: E402
@@ -57,90 +58,19 @@ from motion.robot_kinematics import (  # noqa: E402
     RobotKinematics,
 )
 
-# 두 자리 (프로젝트 베이스 mm). +Y 가 로봇 기준 왼쪽.
-SPOTS = {"left": (150.0, 180.0, 34.0), "right": (150.0, -180.0, 34.0)}
 SPOT_KO = {"left": "왼쪽", "right": "오른쪽"}
 OBJECT_RPY = (180.0, 45.0, 0.0)  # 비스듬히, 베이스 기준
-CYCLES = 10
 # 이만큼 (도) 안이면 초기자세에 있다고 본다.
 AT_INIT_DEG = 2.0
 TICK_S = 0.05
 # 초기자세에 도착한 뒤 다음 사이클 전까지 쉬는 시간 (초).
 INIT_PAUSE_S = 1.0
 STATE_FILE_NAME = "repeat_demo_state.json"
-SETTINGS_PATH = Path(__file__).resolve().with_name("demo_settings.json")
-# 범위 밖이거나 형식이 틀리면 그 값만 기본값을 쓴다.
-SETTING_LIMITS = {"approach_d_mm": (0.0, 60.0), "approach_a_mm": (5.0, 80.0)}  # mm
-CYCLES_LIMITS = (1, 1000)
-SPOT_KEYS = {"left_xyz_mm": "left", "right_xyz_mm": "right"}
-SPOT_LIMITS = ((80.0, 350.0), (-350.0, 350.0), (0.0, 150.0))  # x, y, z mm (베이스)
-SETTING_KEYS = ("cycles", "left_xyz_mm", "right_xyz_mm", "approach_d_mm", "approach_a_mm")
 _log = runlog.get("demo")
 ESTOP_MSG = (
     "E-stop — 팔이 그 자리에 멈췄습니다.\n"
     "「끄기」를 누르면 앉은 자세로 간 뒤 끕니다."
 )
-
-
-def _number_ok(v, lo: float, hi: float) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= float(v) <= hi
-
-
-def _setting_ok(key: str, v) -> bool:
-    if key == "cycles":
-        return isinstance(v, int) and not isinstance(v, bool) and CYCLES_LIMITS[0] <= v <= CYCLES_LIMITS[1]
-    if key in SPOT_KEYS:
-        return isinstance(v, list) and len(v) == 3 and all(_number_ok(c, *lim) for c, lim in zip(v, SPOT_LIMITS))
-    return _number_ok(v, *SETTING_LIMITS[key])
-
-
-def default_demo_settings() -> dict:
-    d, a = approach_mm()
-    return {
-        "cycles": CYCLES,
-        "left_xyz_mm": list(SPOTS["left"]),
-        "right_xyz_mm": list(SPOTS["right"]),
-        "approach_d_mm": d,
-        "approach_a_mm": a,
-    }
-
-
-def _write_settings(path: Path, data: dict) -> None:
-    """한 줄에 키 하나 (좌표도 한 줄)로 써서 손으로 고치기 쉽게 한다."""
-    order = [k for k in default_demo_settings() if k in data] + [k for k in data if k not in SETTING_KEYS]
-    body = ",\n".join(f"  {json.dumps(k)}: {json.dumps(data[k], ensure_ascii=False)}" for k in order)
-    try:
-        path.write_text("{\n" + body + "\n}\n", encoding="utf-8")
-    except OSError as exc:
-        _log.warning("설정 파일을 못 씀 %s: %s", path, exc)
-
-
-def load_demo_settings(path: Path = SETTINGS_PATH) -> dict:
-    """demo_settings.json 값. 없으면 기본값으로 만들고, 빠진 키는 기본값으로 채워 넣는다.
-    잘못된 값은 경고만 남기고 그 키만 기본값을 쓴다."""
-    defaults = default_demo_settings()
-    if not path.exists():
-        _write_settings(path, defaults)
-        return defaults
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("JSON 객체 { } 가 아님")
-    except (OSError, ValueError) as exc:
-        _log.warning("설정 파일을 못 읽음 %s: %s → 기본값", path, exc)
-        return defaults
-    out = dict(defaults)
-    for key in defaults:
-        if key not in data:
-            continue
-        if _setting_ok(key, data[key]):
-            out[key] = data[key]
-        else:
-            _log.warning("설정 %s=%r 이 범위 밖이거나 형식이 틀림 → 기본값 %r", key, data[key], defaults[key])
-    missing = [k for k in defaults if k not in data]
-    if missing:
-        _write_settings(path, {**data, **{k: defaults[k] for k in missing}})
-    return out
 
 
 def _other(side: str) -> str:

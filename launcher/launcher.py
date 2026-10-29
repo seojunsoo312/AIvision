@@ -493,6 +493,13 @@ def main() -> None:
     ap.add_argument("--sim", action="store_true", help="실제 팔 없이 가상 팔로")
     ap.add_argument("--scale", type=float, default=None)
     args = ap.parse_args()
+    try:
+        # 반복 데모 설정 파일을 미리 만들어 둔다. 데모를 켜기 전에도 고칠 수 있게.
+        from demo_settings import ensure_settings_file
+
+        ensure_settings_file()
+    except Exception as exc:  # 설정 파일 때문에 런처가 안 뜨면 안 된다
+        print(f"반복 데모 설정 파일을 못 만듦: {exc}", file=sys.stderr)
     ctk.set_appearance_mode("dark")
     root = ctk.CTk()
     apply_ui_scale(root, args.scale)
