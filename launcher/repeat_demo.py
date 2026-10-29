@@ -9,6 +9,14 @@
   다음 사이클은 반대 방향. 물체는 비스듬히 (Rx, Ry, Rz) = (180, 45, 0), 놓을 때도 같은 자세로 놓는다.
   CYCLES 번 하면 끄기와 같이 앉은 자세로 간 뒤 끝난다.
 
+설정 파일 launcher/demo_settings.json (없으면 기본값으로 만든다, git 에는 안 올림)
+  cycles         반복 횟수 (--cycles 를 주면 그 값)
+  left_xyz_mm    왼쪽 자리 [x, y, z] (베이스 mm, +Y 가 로봇 기준 왼쪽, z 는 물체 중심 높이)
+  right_xyz_mm   오른쪽 자리
+  approach_d_mm  물체 표면 → 대기 위치 거리
+  approach_a_mm  대기 위치 → 집기 위치 거리 (접근 방향)
+  사이클마다 다시 읽으니, 데모 중에 고쳐 저장하면 다음 사이클부터 적용된다.
+
 런처와 주고받기
   명령 (표준 입력, 한 줄에 하나)
     start  정지중이면 다시 시작
@@ -60,11 +68,79 @@ TICK_S = 0.05
 # 초기자세에 도착한 뒤 다음 사이클 전까지 쉬는 시간 (초).
 INIT_PAUSE_S = 1.0
 STATE_FILE_NAME = "repeat_demo_state.json"
+SETTINGS_PATH = Path(__file__).resolve().with_name("demo_settings.json")
+# 범위 밖이거나 형식이 틀리면 그 값만 기본값을 쓴다.
+SETTING_LIMITS = {"approach_d_mm": (0.0, 60.0), "approach_a_mm": (5.0, 80.0)}  # mm
+CYCLES_LIMITS = (1, 1000)
+SPOT_KEYS = {"left_xyz_mm": "left", "right_xyz_mm": "right"}
+SPOT_LIMITS = ((80.0, 350.0), (-350.0, 350.0), (0.0, 150.0))  # x, y, z mm (베이스)
+SETTING_KEYS = ("cycles", "left_xyz_mm", "right_xyz_mm", "approach_d_mm", "approach_a_mm")
 _log = runlog.get("demo")
 ESTOP_MSG = (
     "E-stop — 팔이 그 자리에 멈췄습니다.\n"
     "「끄기」를 누르면 앉은 자세로 간 뒤 끕니다."
 )
+
+
+def _number_ok(v, lo: float, hi: float) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= float(v) <= hi
+
+
+def _setting_ok(key: str, v) -> bool:
+    if key == "cycles":
+        return isinstance(v, int) and not isinstance(v, bool) and CYCLES_LIMITS[0] <= v <= CYCLES_LIMITS[1]
+    if key in SPOT_KEYS:
+        return isinstance(v, list) and len(v) == 3 and all(_number_ok(c, *lim) for c, lim in zip(v, SPOT_LIMITS))
+    return _number_ok(v, *SETTING_LIMITS[key])
+
+
+def default_demo_settings() -> dict:
+    d, a = approach_mm()
+    return {
+        "cycles": CYCLES,
+        "left_xyz_mm": list(SPOTS["left"]),
+        "right_xyz_mm": list(SPOTS["right"]),
+        "approach_d_mm": d,
+        "approach_a_mm": a,
+    }
+
+
+def _write_settings(path: Path, data: dict) -> None:
+    """한 줄에 키 하나 (좌표도 한 줄)로 써서 손으로 고치기 쉽게 한다."""
+    order = [k for k in default_demo_settings() if k in data] + [k for k in data if k not in SETTING_KEYS]
+    body = ",\n".join(f"  {json.dumps(k)}: {json.dumps(data[k], ensure_ascii=False)}" for k in order)
+    try:
+        path.write_text("{\n" + body + "\n}\n", encoding="utf-8")
+    except OSError as exc:
+        _log.warning("설정 파일을 못 씀 %s: %s", path, exc)
+
+
+def load_demo_settings(path: Path = SETTINGS_PATH) -> dict:
+    """demo_settings.json 값. 없으면 기본값으로 만들고, 빠진 키는 기본값으로 채워 넣는다.
+    잘못된 값은 경고만 남기고 그 키만 기본값을 쓴다."""
+    defaults = default_demo_settings()
+    if not path.exists():
+        _write_settings(path, defaults)
+        return defaults
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("JSON 객체 { } 가 아님")
+    except (OSError, ValueError) as exc:
+        _log.warning("설정 파일을 못 읽음 %s: %s → 기본값", path, exc)
+        return defaults
+    out = dict(defaults)
+    for key in defaults:
+        if key not in data:
+            continue
+        if _setting_ok(key, data[key]):
+            out[key] = data[key]
+        else:
+            _log.warning("설정 %s=%r 이 범위 밖이거나 형식이 틀림 → 기본값 %r", key, data[key], defaults[key])
+    missing = [k for k in defaults if k not in data]
+    if missing:
+        _write_settings(path, {**data, **{k: defaults[k] for k in missing}})
+    return out
 
 
 def _other(side: str) -> str:
@@ -93,11 +169,13 @@ class StateFile:
 
 
 class RepeatDemo:
-    def __init__(self, ctrl: Controller, kin: RobotKinematics, state: StateFile, *, cycles: int, viz=None) -> None:
+    def __init__(self, ctrl: Controller, kin: RobotKinematics, state: StateFile, *, cycles: int | None, viz=None) -> None:
         self.ctrl = ctrl
         self.kin = kin
         self.state = state
-        self.cycles = int(cycles)
+        # None 이면 설정 파일의 cycles 를 따른다 (사이클마다 다시 읽음).
+        self._cycles_arg = cycles
+        self.cycles = int(cycles) if cycles is not None else CYCLES
         self.viz = viz
         self.runner = PickPlaceRunner(ctrl)
         self.cmds: queue.Queue[str] = queue.Queue()
@@ -108,7 +186,8 @@ class RepeatDemo:
         self._last: dict = {}
         mins, maxs = bounds_mm()
         self._mins, self._maxs = mins, maxs
-        self._d, self._a = approach_mm()
+        self._settings: dict = {}
+        self.reload_settings()
 
     # ------------------------------------------------------------ 주고받기
 
@@ -190,10 +269,26 @@ class RepeatDemo:
         self.ctrl.init_pose()
         self._wait_goto("homing")
 
+    def reload_settings(self) -> None:
+        settings = load_demo_settings()
+        if settings != self._settings:
+            _log.info(
+                "설정  반복 %s회  왼쪽 %s  오른쪽 %s  d=%g mm  a=%g mm",
+                settings["cycles"] if self._cycles_arg is None else f"{self._cycles_arg}(--cycles)",
+                settings["left_xyz_mm"], settings["right_xyz_mm"],
+                settings["approach_d_mm"], settings["approach_a_mm"],
+            )
+            self._settings = settings
+        if self._cycles_arg is None:
+            self.cycles = int(settings["cycles"])
+
     def _cycle_steps(self):
-        src, dst = SPOTS[self.side], SPOTS[_other(self.side)]
+        settings = self._settings
+        spots = {side: tuple(float(c) for c in settings[key]) for key, side in SPOT_KEYS.items()}
+        src, dst = spots[self.side], spots[_other(self.side)]
+        d, a = settings["approach_d_mm"], settings["approach_a_mm"]
         obj = PlacePose(xyz_mm=src, rpy_deg=OBJECT_RPY)
-        auto = compute_auto_pre(obj, self._mins, self._maxs, self._d, self._a, kin=self.kin, q=self.ctrl.snapshot().q)
+        auto = compute_auto_pre(obj, self._mins, self._maxs, d, a, kin=self.kin, q=self.ctrl.snapshot().q)
         p_xyz, p_rpy = T_to_xyzrpy(auto.T_base)
         g_xyz, g_rpy = T_to_xyzrpy(auto.T_grasp_base)
         # 물체를 집은 손 모양 그대로 옮긴다: 손끝도 물체와 같은 만큼만 움직이고, 손목은 그대로.
@@ -237,6 +332,7 @@ class RepeatDemo:
         try:
             self.go_init()
             while True:
+                self.reload_settings()
                 if self.done >= self.cycles:
                     self.emit("turning_off", f"{self.cycles}회 완료 — 끕니다", finished=True)
                     _log.info("%d회 완료, 끔", self.cycles)
@@ -266,8 +362,9 @@ class RepeatDemo:
             return self._after_estop()
         except _Failed as exc:
             self.state.save("left")
+            lx, ly = self._settings["left_xyz_mm"][:2]
             msg = (
-                f"실패: {exc}\n물체를 왼쪽 자리 (150, 180) 에 놓고 「켜기」를 누르세요."
+                f"실패: {exc}\n물체를 왼쪽 자리 ({lx:g}, {ly:g}) 에 놓고 「켜기」를 누르세요."
                 if not self.ctrl.holding()
                 else f"실패: {exc}\n물체를 쥔 채 멈췄습니다. 손으로 받친 뒤 「끄기」를 누르세요."
             )
@@ -330,7 +427,7 @@ def main(argv: list[str] | None = None, warm: Warm | None = None) -> int:
     """warm: 런처가 미리 만들어 둔 팔 모델 · 제어 루프 (standby.py). 없으면 여기서 만든다."""
     ap = argparse.ArgumentParser(description="반복 데모 (런처가 켠다)")
     ap.add_argument("--sim", action="store_true", help="실제 팔 없이 가상 팔로")
-    ap.add_argument("--cycles", type=int, default=CYCLES)
+    ap.add_argument("--cycles", type=int, default=None, help="반복 횟수. 안 주면 demo_settings.json 의 cycles")
     ap.add_argument("--speed", type=float, default=SPEED_DEFAULT_PCT, help="속도 %% (10–100). 관절 · 직선 이동 같이")
     ap.add_argument("--no-viz", action="store_true", help="3D 화면을 띄우지 않음")
     ap.add_argument("--viz-geometry", default=None, help="3D 화면 창 위치 x,y,w,h")

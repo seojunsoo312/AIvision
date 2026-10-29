@@ -21,6 +21,8 @@ yolo/data.yaml
 vision/calib_data/**
 !vision/calib_data/.gitkeep
 vision/orbbec_filters.json
+# Per-board demo values students edit; update_board.sh must not reset them.
+launcher/demo_settings.json
 
 # Point clouds / local dumps
 **/*.ply
