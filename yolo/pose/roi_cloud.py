@@ -42,9 +42,12 @@ from yolo.config import (
     pose_name,
 )
 from vision.depth_cloud import (
+    PLANE_HEIGHT_MIN_MM,
+    auto_plane_height_mm,
     colorize_depth,
     fit_plane_ransac,
     open_orbbec,
+    plane_noise_mm,
     points_from_mask,
     rotate180,
     write_ply,
@@ -356,8 +359,8 @@ def main() -> None:
     parser.add_argument(
         "--plane-mm",
         type=float,
-        default=3.0,
-        help="책상 평면 이내 점 제거(mm)",
+        default=None,
+        help="책상 평면 이내 점 제거(mm). 안 주면 책상 노이즈를 재서 자동으로 정함",
     )
     parser.add_argument("--no-plane", action="store_true", help="RANSAC 책상 제거 안 함")
     parser.add_argument(
@@ -449,6 +452,7 @@ def main() -> None:
     last_xyz = np.zeros((0, 3), dtype=np.float32)
     last_rgb = np.zeros((0, 3), dtype=np.uint8)
     plane = None
+    plane_mm = PLANE_HEIGHT_MIN_MM if args.plane_mm is None else float(args.plane_mm)
     refit_plane = not args.no_plane
     last_pose = None
     cad_pose = None
@@ -554,6 +558,12 @@ def main() -> None:
                         f"[{plane[0]:.4f}, {plane[1]:.4f}, {plane[2]:.4f}, "
                         f"{plane[3]:.1f}]  inliers={inliers}{extra}"
                     )
+                    if args.plane_mm is None:
+                        noise = plane_noise_mm(table_xyz, plane)
+                        plane_mm = auto_plane_height_mm(noise)
+                        noise_txt = "?" if noise is None else f"{noise:.1f}"
+                        print(f"책상 노이즈 p99={noise_txt}mm → 책상 제거 {plane_mm:.1f}mm (자동)")
+                        _log.info("책상 노이즈 p99=%smm  책상 제거 %.1fmm (자동)", noise_txt, plane_mm)
                 except ValueError as exc:
                     plane = None
                     print(f"책상 평면 실패: {exc}. r로 다시 시도하세요.")
@@ -571,7 +581,7 @@ def main() -> None:
                 result=result,
                 plane=plane,
                 pad=_PAD,
-                plane_mm=args.plane_mm,
+                plane_mm=plane_mm,
                 stride=_STRIDE,
                 T_base_cam=T_bc,
             )
@@ -715,7 +725,8 @@ def main() -> None:
             if plane is None:
                 plane_text = "plane=off"
             else:
-                plane_text = f"plane>{args.plane_mm:.0f}mm"
+                auto = "auto" if args.plane_mm is None else ""
+                plane_text = f"plane>{plane_mm:.1f}mm{auto}"
             hint = "v=3D s=save r=plane q=quit"
             if args.cad:
                 hint = "c=CAD " + hint

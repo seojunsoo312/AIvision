@@ -14,6 +14,7 @@ from vision.transforms import apply_T
 from vision.depth_cloud import (
     Z_MAX_MM,
     Z_MIN_MM,
+    depth_edge_mask,
     largest_component,
     mask_from_xyxy,
     plane_foreground_mask,
@@ -63,8 +64,9 @@ def collect_instances(
     plane_mm: float,
     stride: int,
     T_base_cam: np.ndarray | None,
+    drop_edges: bool = True,
 ) -> list[InstanceCloud]:
-    """YOLO 상자마다 점군 하나, 책상 바탕은 뺀다."""
+    """YOLO 상자마다 점군 하나, 책상 바탕과 가장자리의 튀는 뎁스는 뺀다."""
     h, w = bgr.shape[:2]
     out: list[InstanceCloud] = []
     obb = getattr(result, "obb", None)
@@ -73,6 +75,7 @@ def collect_instances(
     if dets is None:
         return out
     in_base = T_base_cam is not None
+    keep = ~depth_edge_mask(depth) if drop_edges else None
     for i, det in enumerate(dets):
         raw = det.xyxy[0]
         if hasattr(raw, "cpu"):
@@ -97,6 +100,8 @@ def collect_instances(
         # 책상 평면에서 plane_mm 이내 점은 제거한다.
         if plane is not None:
             roi = roi & plane_foreground_mask(depth, K, plane, height_mm=float(plane_mm))
+        if keep is not None:
+            roi = roi & keep
         roi = largest_component(roi)
         xyz, rgb = points_from_mask(depth, K, roi, bgr=bgr, stride=stride)
         if in_base and len(xyz):

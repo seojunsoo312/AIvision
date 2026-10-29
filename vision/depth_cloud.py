@@ -150,6 +150,54 @@ def plane_foreground_mask(
     return valid & (signed < -abs(height_mm))
 
 
+PLANE_HEIGHT_MIN_MM = 3.0
+PLANE_HEIGHT_MAX_MM = 10.0
+PLANE_HEIGHT_MARGIN_MM = 1.5
+
+
+def plane_noise_mm(
+    xyz: np.ndarray, plane: np.ndarray, *, band_mm: float = 15.0, pct: float = 99.0
+) -> float | None:
+    """책상 뎁스 노이즈(mm): 평면 '뒤쪽'(카메라에서 먼 쪽)으로 튄 점들의 pct 백분위.
+
+    책상 아래에는 물체가 없으니 뒤쪽 점은 모두 노이즈다. 노이즈는 앞뒤로 비슷하게 퍼지므로
+    물체에 섞이지 않고 앞쪽 노이즈 크기를 잴 수 있다. 점이 모자라면 None.
+    """
+    pts = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    signed = pts @ np.asarray(plane[:3], dtype=np.float64) + float(plane[3])
+    # 물체는 음수 쪽. 양수 = 책상보다 먼 쪽.
+    behind = signed[(signed > 0.0) & (signed < band_mm)]
+    if len(behind) < 200:
+        return None
+    return float(np.percentile(behind, pct))
+
+
+def auto_plane_height_mm(noise_mm: float | None) -> float:
+    """책상 노이즈 + 여유를 [MIN, MAX] 로 묶은 책상 제거 높이."""
+    if noise_mm is None:
+        return PLANE_HEIGHT_MIN_MM
+    return float(np.clip(noise_mm + PLANE_HEIGHT_MARGIN_MM, PLANE_HEIGHT_MIN_MM, PLANE_HEIGHT_MAX_MM))
+
+
+def depth_edge_mask(
+    depth_mm: np.ndarray, *, jump_mm: float = 10.0, mid_mm: float = 3.0, ksize: int = 5
+) -> np.ndarray:
+    """물체 가장자리의 튀는 픽셀(앞 물체와 뒤 책상 사이 중간 깊이)을 True 로 표시한다.
+
+    ksize 창 안에 jump_mm 이상 깊이 차가 있고, 픽셀이 창의 가장 가까운 값과 가장 먼 값
+    양쪽에서 mid_mm 넘게 떨어져 있으면 중간에 뜬 점으로 본다. 물체 윗면(가장 가까운 값)과
+    책상(가장 먼 값)은 남는다.
+    """
+    z = depth_mm.astype(np.float32)
+    valid = (z > Z_MIN_MM) & (z < Z_MAX_MM)
+    kernel = np.ones((ksize, ksize), np.uint8)
+    zmax = cv2.dilate(np.where(valid, z, 0.0).astype(np.float32), kernel)
+    zmin = cv2.erode(np.where(valid, z, np.float32(1e6)).astype(np.float32), kernel)
+    jump = (zmax - zmin) >= jump_mm
+    middle = ((zmax - z) > mid_mm) & ((z - zmin) > mid_mm)
+    return valid & jump & middle
+
+
 def largest_component(mask: np.ndarray, min_area: int = 20) -> np.ndarray:
     """고립된 뎁스 노이즈를 버리고 가장 큰 연결 성분만 남긴다."""
     binary = mask.astype(np.uint8)
