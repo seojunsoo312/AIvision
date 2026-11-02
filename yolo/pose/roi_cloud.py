@@ -53,7 +53,7 @@ from vision.depth_cloud import (
     write_ply,
 )
 from yolo.pose.debug.local_plane import SLICE_MM, local_pose
-from yolo.pose.instances import collect_instances, select_topmost
+from yolo.pose.instances import collect_instances, depth_blob_boxes, select_topmost
 from motion.register_link import read_request, write_status
 from motion import runlog  # noqa: E402
 
@@ -156,6 +156,12 @@ def _draw_cad_axes(
     cv2.circle(img, po, 4, (255, 255, 255), -1, cv2.LINE_AA)
 
 
+def _has_dets(result) -> bool:
+    boxes = getattr(result, "boxes", None)
+    obb = getattr(result, "obb", None)
+    return bool((boxes is not None and len(boxes)) or (obb is not None and len(obb)))
+
+
 def _median_xyz(xyz: np.ndarray) -> np.ndarray:
     return np.median(np.asarray(xyz, dtype=np.float64).reshape(-1, 3), axis=0)
 
@@ -180,8 +186,9 @@ class _CadWorker:
         grasp_xyz_mm: np.ndarray | None = None,
         grasp_rpy_deg: np.ndarray | None = None,
         frame_name: str = "camera_mm",
+        method: str = "rest",
     ):
-        from yolo.pose.register import load_cad_xyz, register_pose
+        from yolo.pose.register import load_cad_xyz, register_pose, warm_rest_icp
 
         self._register_pose = register_pose
         self.voxel_mm = voxel_mm
@@ -218,7 +225,9 @@ class _CadWorker:
         self.error: str | None = None
         self.busy = False
         self._stop = False
+        self.method = method
         load_cad_xyz(voxel_mm=voxel_mm)
+        warm_rest_icp(voxel_mm)
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -274,6 +283,7 @@ class _CadWorker:
                     camera_origin=self.camera_origin,
                     desk_plane=desk_plane,
                     class_id=None if T_init is not None else class_id,
+                    method=self.method,
                 )
                 err = None
             except Exception as exc:
@@ -396,6 +406,18 @@ def main() -> None:
         help="마지막 전체 등록 자리에서 이만큼 움직이면 추적 대신 처음부터 다시 등록",
     )
     parser.add_argument(
+        "--no-blobs",
+        action="store_true",
+        help="YOLO 가 아무것도 못 찾을 때 뎁스 덩어리로 물체 찾기를 끈다",
+    )
+    parser.add_argument(
+        "--register",
+        choices=("rest", "class"),
+        default="rest",
+        help="rest=책상 위 세 자세로 x·y·회전만 찾기(빠름, 자세 클래스 불필요, 안 맞으면 class 로). "
+        "class=예전 방식(YOLO 자세 클래스 + ICP)",
+    )
+    parser.add_argument(
         "--box",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -483,11 +505,17 @@ def main() -> None:
             grasp_xyz_mm=grasp_xyz_mm,
             grasp_rpy_deg=grasp_rpy_deg,
             frame_name=frame_name,
+            method=args.register,
         )
         if args.base:
             print(
-                "CAD: YOLO 자세(세우기/눕히기/비스듬히)로 한 번 맞춘다. "
-                "맞으면 축을 고정하고, "
+                (
+                    "CAD: 책상 위 세 자세(세우기/눕히기/비스듬히) 중에서 x·y·회전을 찾는다. "
+                    "안 맞으면 YOLO 자세 + ICP 로 한 번 더. "
+                    if args.register == "rest"
+                    else "CAD: YOLO 자세(세우기/눕히기/비스듬히)로 한 번 맞춘다. "
+                )
+                + "맞으면 축을 고정하고, "
                 f"{args.cad_move_mm:.0f}mm 이상 움직이면 ICP. "
                 "클래스 후보가 모두 실패하면 전체 검색 한 번. "
                 f"{args.cad_reset_mm:.0f}mm 이상 옮기거나 자세가 바뀌거나 추적이 실패하면 처음부터. "
@@ -573,6 +601,10 @@ def main() -> None:
             )
             result = results[0]
             depth_vis = colorize_depth(depth)
+            blob_boxes = None
+            if not args.no_blobs and plane is not None and not _has_dets(result):
+                # 새 책상의 흰 브라켓은 예전 YOLO 가 못 찾는다. 흰색 YOLO 학습 전까지 뎁스 덩어리로.
+                blob_boxes = depth_blob_boxes(depth, K, plane, plane_mm, T_bc)
             instances = collect_instances(
                 depth=depth,
                 bgr=bgr,
@@ -583,6 +615,7 @@ def main() -> None:
                 plane_mm=plane_mm,
                 stride=_STRIDE,
                 T_base_cam=T_bc,
+                xyxys=blob_boxes,
             )
             chosen = select_topmost(instances)
             n_det = len(instances)
@@ -701,12 +734,16 @@ def main() -> None:
                 x1, y1, x2, y2 = [int(v) for v in inst.xyxy[:4]]
                 color = (0, 255, 255) if i == chosen else (0, 180, 0)
                 tag_x, tag_y = x1, max(16, y1 - 6)
+                shown_class = inst.class_id
+                if shown_class is None and i == chosen and cad_pose is not None:
+                    # 뎁스 덩어리 상자엔 YOLO 자세가 없다. 정합이 찾은 자세를 쓴다.
+                    shown_class = cad_pose.get("class_id")
                 pose = (
-                    pose_name(inst.class_id, korean=True)
-                    if inst.class_id is not None
-                    else "?"
+                    pose_name(shown_class, korean=True)
+                    if shown_class is not None
+                    else "물체"
                 )
-                pose_color = _POSE_BGR.get(inst.class_id, color)
+                pose_color = _POSE_BGR.get(shown_class, color)
                 if args.box:
                     # 고른(가장 위) 물체는 굵게
                     cv2.rectangle(

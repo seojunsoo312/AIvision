@@ -109,3 +109,21 @@ class DepthVisRangeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DepthBlobTest(unittest.TestCase):
+    """YOLO 대신 뎁스 덩어리로 물체 찾기: 가장자리에 닿거나 높은 덩어리는 뺀다."""
+
+    def test_keeps_object_drops_border_and_tall(self):
+        from yolo.pose.instances import depth_blob_boxes
+
+        depth = np.full((480, 640), DESK_MM, np.float32)
+        depth[:, 600:] = 0.0  # 컬러 맞춤 뒤 오른쪽은 뎁스가 없다
+        depth[200:240, 300:360] = DESK_MM - 35.0  # 브라켓
+        depth[100:140, 585:600] = DESK_MM - 10.0  # 뎁스 끝에 닿은 책상 프레임
+        depth[300:360, 100:160] = DESK_MM - 150.0  # 높은 것 (팔)
+        plane = np.array([0.0, 0.0, 1.0, -DESK_MM])  # 카메라 z = 책상 깊이
+        boxes = depth_blob_boxes(depth, K, plane, 4.0, None)
+        self.assertEqual(len(boxes), 1)
+        x1, y1, x2, y2 = boxes[0]
+        self.assertTrue(295 <= x1 <= 305 and 195 <= y1 <= 205 and 355 <= x2 <= 365 and 235 <= y2 <= 245)
