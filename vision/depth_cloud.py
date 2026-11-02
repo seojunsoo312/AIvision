@@ -28,30 +28,48 @@ def rotate180(bgr, depth_mm):
     return bgr, depth_mm
 
 
-def colorize_depth(
-    depth_mm: np.ndarray, center_span_mm: float = 60.0
-) -> np.ndarray:
+# 화면용 깊이 색 범위 (책상 = 화면 깊이 중앙값 기준).
+# 먼 쪽은 책상 기울기만 담으면 되고, 가까운 쪽은 브라켓(~42mm)과 로봇팔까지 담아야 한다.
+DEPTH_VIS_FAR_MM = 30.0
+DEPTH_VIS_NEAR_MIN_MM = 80.0
+DEPTH_VIS_NEAR_MAX_MM = 300.0
+_DEPTH_VIS_NEAR_STEP_MM = 50.0  # 범위가 프레임마다 흔들려 색이 깜빡이지 않게 이 단위로 끊는다
+
+
+def depth_vis_range(depth_mm: np.ndarray) -> tuple[float, float] | None:
+    """화면에 색으로 펼칠 깊이 범위 (low, high) mm. 유효한 깊이가 없으면 None."""
+    sub = depth_mm[::4, ::4]
+    values = sub[(sub > Z_MIN_MM) & (sub < Z_MAX_MM)]
+    if values.size == 0:
+        return None
+    center = float(np.median(values))  # 대부분 책상
+    # 가장 가까운 물체(상위 0.5%)까지 담는다. 한두 점 튀는 노이즈는 무시.
+    nearest = float(np.partition(values, values.size // 200)[values.size // 200])
+    step = _DEPTH_VIS_NEAR_STEP_MM
+    near = np.ceil((center - nearest) / step) * step
+    near = float(np.clip(near, DEPTH_VIS_NEAR_MIN_MM, DEPTH_VIS_NEAR_MAX_MM))
+    low = max(Z_MIN_MM, center - near)
+    high = min(Z_MAX_MM, center + DEPTH_VIS_FAR_MM)
+    return low, high
+
+
+def colorize_depth(depth_mm: np.ndarray) -> np.ndarray:
     """깊이를 보기 좋게 자동 확대한다. 점군 계산에는 영향을 주지 않는다.
 
     화면용이라 매 프레임 돈다. numpy 대신 cv2 연산으로 14ms → 2.5ms.
     """
     depth = depth_mm if depth_mm.dtype == np.float32 else depth_mm.astype(np.float32)
     valid = cv2.inRange(depth, _Z_MIN_OPEN, _Z_MAX_OPEN)
-    # 확대 중심은 1/16 픽셀의 중앙값으로 충분하다.
-    sub = depth[::4, ::4]
-    values = sub[(sub > Z_MIN_MM) & (sub < Z_MAX_MM)]
-    if values.size == 0:
+    rng = depth_vis_range(depth)
+    if rng is None:
         return np.zeros((*depth.shape[:2], 3), dtype=np.uint8)
-
-    center = float(np.median(values))
-    # 작업대 깊이 주변을 확대한다. 극단값과 프레임 가장자리 노이즈는 무시한다.
-    low = max(Z_MIN_MM, center - center_span_mm / 2.0)
-    high = min(Z_MAX_MM, center + center_span_mm / 2.0)
+    low, high = rng
     scale = 255.0 / max(high - low, 1.0)
     clipped = cv2.max(cv2.min(depth, high), low)
     # -0.5: convertScaleAbs 는 반올림하므로 예전 astype(uint8) 처럼 버림이 되게 한다.
     norm = cv2.convertScaleAbs(clipped, alpha=scale, beta=-low * scale - 0.5)
-    color = cv2.applyColorMap(norm, cv2.COLORMAP_TURBO)
+    # 가까울수록(높을수록) 뜨거운 색: 책상 파랑 → 브라켓 노랑 → 로봇팔 빨강
+    color = cv2.applyColorMap(cv2.bitwise_not(norm), cv2.COLORMAP_TURBO)
     vis = cv2.bitwise_and(color, color, mask=valid)
     cv2.putText(
         vis,

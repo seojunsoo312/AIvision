@@ -341,7 +341,6 @@ _STRIDE = 1
 _PAD = 2
 _VOXEL_MM = 1.0
 _OVERLAY_VOXEL_MM = 0.5
-_DEPTH_SPAN_MM = 60.0
 # YOLO 자세가 이 프레임 수만큼 연속으로 달라야 다시 전체 등록한다(약 0.7초).
 _CLASS_CHANGE_FRAMES = 10
 _OUTLIER_STD = 1.5
@@ -573,7 +572,7 @@ def main() -> None:
                 bgr, conf=args.conf, device=device, verbose=False, imgsz=640
             )
             result = results[0]
-            depth_vis = colorize_depth(depth, center_span_mm=_DEPTH_SPAN_MM)
+            depth_vis = colorize_depth(depth)
             instances = collect_instances(
                 depth=depth,
                 bgr=bgr,

@@ -7,7 +7,11 @@ import numpy as np
 from vision.depth_cloud import (
     PLANE_HEIGHT_MAX_MM,
     PLANE_HEIGHT_MIN_MM,
+    DEPTH_VIS_FAR_MM,
+    DEPTH_VIS_NEAR_MAX_MM,
     auto_plane_height_mm,
+    colorize_depth,
+    depth_vis_range,
     depth_edge_mask,
     fit_plane_ransac,
     plane_foreground_mask,
@@ -72,6 +76,35 @@ class EdgeMaskTest(unittest.TestCase):
         self.assertGreater(edge[ring].mean(), 0.95)
         self.assertFalse(edge[205:275, 285:355].any())  # 물체 윗면 안쪽
         self.assertFalse(edge[:150].any())  # 멀리 떨어진 책상
+
+
+class DepthVisRangeTest(unittest.TestCase):
+    """화면 깊이 색: 책상보다 높은 브라켓과 로봇팔이 서로 다른 색이어야 한다."""
+
+    def _scene(self):
+        depth = np.full((480, 640), DESK_MM, np.float32)
+        depth[200:280, 100:180] = DESK_MM - 42.0  # 브라켓 윗면
+        depth[150:480, 300:400] = DESK_MM - 180.0  # 로봇팔
+        return depth
+
+    def test_bracket_and_arm_get_different_colors(self):
+        depth = self._scene()
+        low, high = depth_vis_range(depth)
+        self.assertLessEqual(low, DESK_MM - 180.0)  # 팔까지 담음
+        self.assertEqual(high, DESK_MM + DEPTH_VIS_FAR_MM)
+        vis = colorize_depth(depth).astype(int)
+        desk, bracket, arm = vis[100, 50], vis[240, 140], vis[400, 350]
+        self.assertGreater(np.abs(bracket - arm).sum(), 60)
+        self.assertGreater(np.abs(bracket - desk).sum(), 60)
+
+    def test_range_is_capped_and_ignores_specks(self):
+        depth = self._scene()
+        depth[0:3, 0:3] = 100.0  # 몇 점 튀는 노이즈
+        low, _ = depth_vis_range(depth)
+        self.assertGreaterEqual(low, DESK_MM - DEPTH_VIS_NEAR_MAX_MM)
+
+    def test_empty_depth(self):
+        self.assertIsNone(depth_vis_range(np.zeros((480, 640), np.float32)))
 
 
 if __name__ == "__main__":
