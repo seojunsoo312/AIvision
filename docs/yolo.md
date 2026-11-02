@@ -11,6 +11,8 @@
 ```bash
 python yolo/train/capture.py                 # 사진 저장. SPACE=저장  q=종료
 python yolo/train/label.py                   # 0/1/2 로 자세, 대각 두 점으로 박스
+python yolo/train/kpt_label.py --images yolo/datasets/seat/images --split train   # (실험) 키포인트 라벨. 키 설명은 파일 맨 위
+python -m yolo.pose.kpt_live                 # (실험) 실시간 키포인트 자세 + c 로 흰 브라켓 불량 판정. 가중치 v4n_ft 필요
 python yolo/train/prepare.py                 # 학습/검증 목록
 python yolo/train/train.py                   # 학습 → weights/best.pt
 python yolo/train/detect.py                  # 실시간 박스
@@ -43,6 +45,9 @@ python yolo/pose/roi_cloud.py                # 점군을 CAD와 맞춰 로봇 �
 | `data.yaml` | 학습이 읽는 클래스 목록. `prepare.py`가 이 PC 경로로 다시 씁니다. |
 | `train/capture.py` | 학습용 사진을 `datasets/raw/images/`에 저장합니다. |
 | `train/label.py` | 사진에 자세와 가로세로 박스를 그립니다. |
+| `train/kpt_label.py` | 키포인트 라벨 (YOLO-pose, `sim-pose` 브랜치 실험). 시뮬 모델이 먼저 점을 찍고 사람은 보이는 점만 고칩니다. 8 · 9번(안쪽 접힌 곳)은 표시가 없어 자세에서 자동으로 채웁니다. `f` 테두리 자동 맞춤은 지금 자세에서 출발해 CAD 윤곽선이 사진 테두리선에 붙도록 위치 · 각도를 다듬습니다(흰 · 검은 브라켓 모두). `g` 책상 붙이기(기본 켜짐)는 세우기 · 눕히기 · 비스듬히 중 하나로 보고 x · y · 각도만 맞춰서 보이는 점 2개로도 됩니다. 저장은 맞춘 자세에서 CAD 로 다시 투영한 자리이고, 번호는 대칭 상관없이 찍어도 시뮬 라벨 규칙으로 다시 매깁니다. 카메라는 사진 폴더 옆 `calib/`(intrinsics.json, eye_to_hand.json)을 먼저 읽고, `split.json` 이 있으면 `--split train/test` 로 고릅니다. |
+| `pose/kpt_live.py` | (실험, `sim-pose`) 카메라 → YOLO-pose 키포인트 → 책상 붙이기 자세를 실시간으로. `c` 정밀 분석 = 테두리 자동 맞춤 + 흰 브라켓 마커 불량 판정, 터미널에 펜던트 숫자(xyz · RPY). 뎁스는 안 쓰고 브라켓이 책상 위에 있다고 가정. 가중치 `vision/sim/out/pose_runs/v4n_ft/weights/best.pt` 는 git 에 없어 따로 복사. |
+| `pose/sim_defect_check.py` | (실험) 흰 브라켓 마커 불량 규칙 (CAD 윤곽 안, 구멍 자리 빼고 어두운 픽셀 수). `--real 폴더` 로 사진 판정, 없으면 합성 시험. |
 | `train/boxes.py` | 박스를 라벨 txt(`class cx cy w h`)로 저장합니다. |
 | `train/prepare.py` | 사진을 복사하지 않고 train/val 목록만 만듭니다. |
 | `train/train.py` | YOLO11n으로 학습합니다. 결과는 `weights/best.pt`입니다. |
