@@ -4,8 +4,9 @@
   python launcher/launcher.py          # 실제 팔
   python launcher/launcher.py --sim    # 가상 팔로 시험
 
-버튼은 줄마다 [켜기] [끄기] [정지]. 지금은 「반복 데모」와 「원격 조종」이 동작하고 나머지는 준비 중이다.
-둘 다 같은 팔을 쓰므로 한 번에 하나만 켠다.
+버튼은 줄마다 [켜기] [끄기] [정지]. 「반복 데모」·「원격 조종」·「펜던트」·「카메라 창」이 동작하고
+「카메라로 집기」는 준비 중이다. 반복 데모 · 원격 조종 · 펜던트는 같은 팔을 쓰므로 한 번에 하나만 켠다.
+카메라 창은 팔을 쓰지 않아 같이 켤 수 있다 (펜던트의 사물 위치 칸은 카메라 창에서 위치를 받는다).
 각 프로그램 (launcher/repeat_demo.py · launcher/teleop.py) 을 따로 켜서 표준 입력으로 명령을 보내고,
 표준 출력으로 상태를 받는다.
 팔 모델 · lerobot 준비에 15초 가까이 걸려서, 런처가 뜰 때 launcher/standby.py 를 하나 미리 켜 둔다
@@ -17,9 +18,11 @@ from __future__ import annotations
 import argparse
 import json
 import queue
+import signal
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,6 +82,63 @@ JOBS = {
                 "stopped": ("start", "off"), "error": ("start", "off"), "estop": ("off",)},
     ),
 }
+
+
+@dataclass(frozen=True)
+class Tool:
+    """런처 「도구」 줄. 제 창을 가진 프로그램을 그대로 띄우고, 끌 때는 신호를 보낸다."""
+
+    title: str
+    script: str  # 프로젝트 기준 경로
+    off_signal: int  # 「끄기」 때 보내는 신호
+    uses_arm: bool
+    off_msg: str
+
+
+TOOLS = {
+    # 펜던트는 SIGTERM 을 창 닫기와 같게 처리한다 (토크가 켜져 있으면 쉬는 자세로 간 뒤 끔, pendant/main.py).
+    "pendant": Tool("펜던트", "pendant/main.py", signal.SIGTERM, True,
+                    "펜던트를 끄는 중입니다. 팔이 연결돼 있으면 쉬는 자세로 간 뒤 꺼집니다."),
+    # 카메라 창은 Ctrl+C 와 같은 SIGINT 로 끄면 카메라를 닫고 끝난다.
+    "camera": Tool("카메라 창", "yolo/pose/roi_cloud.py", signal.SIGINT, False, "카메라 창을 끄는 중입니다."),
+}
+# 「끄기」 뒤 이만큼(초) 지나도 안 꺼지면 다음 신호를 보낸다. 펜던트는 확인 창을 기다릴 수 있어 강제로 끄지 않는다.
+TOOL_FORCE_S = {"camera": 8.0}
+# 「끄기」 뒤 이만큼(초) 지나도 안 꺼지면 (펜던트 확인 창에서 「아니오」 등) 「끄기」를 다시 누를 수 있게 한다.
+TOOL_OFF_RETRY_S = 30.0
+# 켜고 이 안에 오류로 꺼지면 안내를 띄운다 (카메라를 다른 프로그램이 쓰는 경우 등).
+TOOL_EARLY_EXIT_S = 15.0
+
+
+class ToolProcess:
+    """도구 하나. 출력은 버리고 (실행 기록은 각 프로그램이 로그 파일에 남긴다) 오류 끝부분만 모은다."""
+
+    def __init__(self, tool: Tool) -> None:
+        self.tool = tool
+        self.started = time.monotonic()
+        self.off_at: float | None = None
+        self.stderr_tail: deque[str] = deque(maxlen=12)
+        # 런처를 닫아도 도구는 그대로 둔다 (팔을 잡고 있을 수 있다) → 따로 세션.
+        self.proc = subprocess.Popen(
+            [sys.executable, str(PROJECT / tool.script)], cwd=str(PROJECT), stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True,
+        )
+        threading.Thread(target=self._read_err, daemon=True).start()
+
+    def _read_err(self) -> None:
+        for line in self.proc.stderr:
+            line = line.rstrip()
+            if line and " INFO " not in line:
+                self.stderr_tail.append(line)
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def signal(self, sig: int) -> None:
+        try:
+            self.proc.send_signal(sig)
+        except OSError:
+            pass
 
 
 class JobProcess:
@@ -163,6 +223,8 @@ class Launcher:
         self.proc: JobProcess | None = None
         # 미리 켜 둔 프로그램 (팔은 아직 연결하지 않음). 「켜기」를 누르면 active 로 넘어간다.
         self.standby: JobProcess | None = None
+        # 도구 (펜던트 · 카메라 창). 제 창을 가진 프로그램이라 따로 켜고 끈다.
+        self.tools: dict[str, ToolProcess | None] = {key: None for key in TOOLS}
         self._standby_tries = 0
         self._closing = False
         self.state = "off"
@@ -189,8 +251,8 @@ class Launcher:
         self._row("teleop", "원격 조종", stop=True)
         self._row("vision_pick", "카메라로 집기", stop=True, dummy=True)
         self._section("도구")
-        self._row("pendant", "펜던트", stop=True, dummy=True)
-        self._row("camera", "카메라 창", stop=False, dummy=True)
+        self._row("pendant", "펜던트", stop=False)
+        self._row("camera", "카메라 창", stop=False)
 
         self.speed_pct = self._load_speed()
         self._speed_section()
@@ -309,6 +371,8 @@ class Launcher:
         lamp.pack(side="left")
         if dummy:
             handlers = (self._dummy,) * 3
+        elif key in TOOLS:
+            handlers = (lambda: self.on_tool_start(key), lambda: self.on_tool_off(key), self._dummy)
         else:
             handlers = (lambda: self.on_start(key), lambda: self.on_off(key), lambda: self.on_stop(key))
         btns = {}
@@ -330,17 +394,27 @@ class Launcher:
     def _refresh(self) -> None:
         """켜져 있는 프로그램 상태에 맞춰 불과 버튼을 바꾼다."""
         st = self.state
+        arm_tool = self._arm_tool()
         for key, row in self.rows.items():
             if row["dummy"]:
                 self._set_lamp(key, "off")
                 continue
-            if key == self.active:
+            if key in TOOLS:
+                tp = self.tools[key]
+                if tp is not None and tp.alive():
+                    self._set_lamp(key, "busy" if tp.off_at is not None else "on")
+                    enable = () if tp.off_at is not None else ("off",)
+                else:
+                    self._set_lamp(key, "off")
+                    # 펜던트는 반복 데모 · 원격 조종이 팔을 쓰는 동안 켤 수 없다.
+                    enable = ("start",) if not (TOOLS[key].uses_arm and self.active is not None) else ()
+            elif key == self.active:
                 self._set_lamp(key, STATE_LAMP.get(st, "busy"))
                 enable = JOBS[key].enable.get(st, ())
             else:
                 self._set_lamp(key, "off")
-                # 다른 프로그램이 팔을 쓰는 동안은 켤 수 없다.
-                enable = ("start",) if self.active is None else ()
+                # 다른 프로그램(펜던트 포함)이 팔을 쓰는 동안은 켤 수 없다.
+                enable = ("start",) if self.active is None and arm_tool is None else ()
             for name, btn in row["btns"].items():
                 btn.configure(state="normal" if name in enable else "disabled")
         self.estop_btn.configure(state="normal" if self.active is not None and st in ESTOP_STATES else "disabled")
@@ -351,8 +425,21 @@ class Launcher:
         self.speed_slider.configure(state=speed_state)
         self.info.configure(text=self._info_text())
 
+    def _arm_tool(self) -> str | None:
+        """팔을 쓰는 도구(펜던트)가 켜져 있으면 그 이름."""
+        for key, tp in self.tools.items():
+            if tp is not None and tp.alive() and TOOLS[key].uses_arm:
+                return key
+        return None
+
     def _info_text(self) -> str:
         if self.active is None:
+            on = [TOOLS[k].title for k, tp in self.tools.items() if tp is not None and tp.alive()]
+            if on:
+                text = f"켜져 있음: {', '.join(on)}"
+                if self._arm_tool():
+                    text += "\n펜던트가 팔을 쓰는 동안 반복 데모 · 원격 조종은 켤 수 없습니다."
+                return text
             return "꺼짐 — 켤 프로그램의 「켜기」를 누르세요."
         job, st, ev = JOBS[self.active], self.state, self.info_ev
         if self.active == "demo":
@@ -376,6 +463,8 @@ class Launcher:
     # ------------------------------------------------------------ 버튼
 
     def on_start(self, key: str) -> None:
+        if self._arm_tool() is not None:
+            return
         if self.proc is not None and self.proc.alive():
             if key == self.active and self.state in ("stopped", "error"):
                 self.popup.close()
@@ -415,6 +504,58 @@ class Launcher:
         else:
             self._popup("앉은 자세로 간 뒤 끕니다.")
 
+    def on_tool_start(self, key: str) -> None:
+        tp = self.tools[key]
+        if tp is not None and tp.alive():
+            return
+        if TOOLS[key].uses_arm and self.active is not None:
+            return
+        self.status.configure(text="")
+        try:
+            self.tools[key] = ToolProcess(TOOLS[key])
+            self.status.configure(text=f"{TOOLS[key].title}을(를) 켰습니다. 창이 뜨기까지 몇 초 걸립니다.")
+        except OSError as exc:
+            self.popup.show(f"{TOOLS[key].title}을(를) 켜지 못했습니다.\n{exc}", color="#f87171")
+        self._refresh()
+
+    def on_tool_off(self, key: str) -> None:
+        tp = self.tools[key]
+        if tp is None or not tp.alive() or tp.off_at is not None:
+            return
+        tp.off_at = time.monotonic()
+        tp.signal(TOOLS[key].off_signal)
+        self.status.configure(text=TOOLS[key].off_msg)
+        self._refresh()
+
+    def _poll_tools(self) -> None:
+        changed = False
+        for key, tp in self.tools.items():
+            if tp is None:
+                continue
+            if tp.alive():
+                force = TOOL_FORCE_S.get(key)
+                waited = None if tp.off_at is None else time.monotonic() - tp.off_at
+                if waited is not None and force is not None and waited > force:
+                    tp.signal(signal.SIGTERM if waited < 2 * force else signal.SIGKILL)
+                elif waited is not None and force is None and waited > TOOL_OFF_RETRY_S:
+                    tp.off_at = None
+                    self.status.configure(text=f"{TOOLS[key].title}이(가) 아직 켜져 있습니다. 그 창을 확인하세요.")
+                    changed = True
+                continue
+            # 꺼졌다 (「끄기」 또는 창을 직접 닫음).
+            code = tp.proc.returncode
+            early = time.monotonic() - tp.started < TOOL_EARLY_EXIT_S
+            if tp.off_at is None and code not in (0, None) and early:
+                tail = "\n".join(list(tp.stderr_tail)[-4:])
+                self.popup.show(f"{TOOLS[key].title}이(가) 바로 꺼졌습니다.\n{tail}", color="#f87171",
+                                title=TOOLS[key].title)
+            if tp.off_at is not None:
+                self.status.configure(text=f"{TOOLS[key].title}이(가) 꺼졌습니다.")
+            self.tools[key] = None
+            changed = True
+        if changed:
+            self._refresh()
+
     def on_estop(self) -> None:
         if self.proc is not None and self.proc.alive():
             self.proc.send("estop")
@@ -423,6 +564,7 @@ class Launcher:
 
     def _poll(self) -> None:
         self._poll_standby()
+        self._poll_tools()
         proc = self.proc
         if proc is not None:
             while True:

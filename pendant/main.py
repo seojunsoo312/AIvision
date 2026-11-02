@@ -205,10 +205,24 @@ def main() -> None:
     root = ctk.CTk()
     apply_ui_scale(root, args.scale)
     root.report_callback_exception = _report_tk_error
-    PendantGui(root, ctrl, viz, meshcat_url=viz.url or "", grasp=args.grasp)
+    gui = PendantGui(root, ctrl, viz, meshcat_url=viz.url or "", grasp=args.grasp)
     if open_browser and viz.url:
         root.after(400, lambda: _open_meshcat_beside(root, viz.url))
+    _close_on_sigterm(root, gui)
     root.mainloop()
+
+
+def _close_on_sigterm(root, gui) -> None:
+    """런처의 「끄기」(SIGTERM)를 창 닫기 버튼과 같게 처리한다: 토크가 켜져 있으면 쉬는 자세로 간 뒤 끈다."""
+    import signal
+
+    signal.signal(signal.SIGTERM, lambda *_: root.after(0, gui.on_close))
+
+    # Tk 가 이벤트를 기다리는 동안에는 파이썬 신호 처리기가 돌지 않으므로 주기적으로 깨운다.
+    def wake() -> None:
+        root.after(200, wake)
+
+    wake()
 
 
 if __name__ == "__main__":
