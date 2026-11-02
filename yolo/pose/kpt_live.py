@@ -7,6 +7,7 @@
 평소: 카메라 → YOLO-pose 키포인트 → 책상 붙이기 (세우기 · 눕히기 · 비스듬히 중 하나로, 손눈의 책상 높이로 깊이).
       화면에 CAD 윤곽 · 자세 종류 · 베이스 위치(mm) · 돌아간 각도.
 c   : 정밀 분석. 테두리 자동 맞춤 → 흰 브라켓 불량 판정 (마커). 화면을 멈추고 터미널에 표 (펜던트에 넣을 xyz · RPY 포함).
+      윤곽 색: 초록 양품 · 빨강 불량 · 보라 검사 안 함 (검은 브라켓) · 주황 브라켓 아님 (윤곽이 사진 테두리와 안 맞음).
       아무 키나 누르면 다시 실시간.
 s   : 지금 영상 저장 (yolo/datasets/live/)
 n/p : (--images 일 때) 다음 / 이전 사진
@@ -40,7 +41,8 @@ FALLBACK_WEIGHTS = RUNS / "v4n" / "weights" / "best.pt"
 LIVE_DIR = ROOT / "datasets" / "live"
 WIN = "keypoint live"
 OUTLINE_BGR = (255, 200, 0)
-VERDICT_BGR = {"양품": (0, 200, 0), "불량": (0, 0, 255), "검사 안 함": (180, 180, 180)}
+# 판정 색: 초록 양품, 빨강 불량, 보라 검사 안 함 (검은 브라켓. 회색은 화면에서 안 보였다), 주황 브라켓 아님
+VERDICT_BGR = {"양품": (0, 200, 0), "불량": (0, 0, 255), "검사 안 함": (255, 0, 200), "브라켓 아님": (0, 140, 255)}
 
 
 def label(img: np.ndarray, text: str, org: tuple[int, int], scale: float, color, thick: int = 1) -> None:
@@ -98,11 +100,10 @@ def draw_live(frame: np.ndarray, insts: list, cam, fps: float, note: str) -> np.
 
 def analyze(frame: np.ndarray, model, cam) -> tuple[np.ndarray, list[dict]]:
     """정밀 분석: 테두리 자동 맞춤 + 불량 판정. (그림, 결과 목록). 터미널 출력은 부르는 쪽."""
-    from yolo.pose.sim_defect_check import DARK_LEVEL, inspect
+    from yolo.pose.sim_defect_check import inspect
     from yolo.train import kpt_label as KL
 
     results = inspect(frame, model, cam)
-    g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     vis = frame.copy()
     for k, r in enumerate(results):
         inst = KL.Instance()
@@ -112,7 +113,7 @@ def analyze(frame: np.ndarray, model, cam) -> tuple[np.ndarray, list[dict]]:
         r["pendant"] = pendant_numbers(r["T_base"])
         col = VERDICT_BGR[r["verdict"]]
         if r["white"]:
-            vis[(g < DARK_LEVEL) & (r["region"] > 0)] = (0, 0, 255)
+            vis[r["marks"]] = (0, 0, 255)
         for c in inst.outline or []:
             cv2.polylines(vis, [c.astype(np.int32)], True, col, 2, cv2.LINE_AA)
         x0, y0 = int(inst.box[0]), int(inst.box[1])
@@ -125,10 +126,10 @@ def print_results(results: list[dict], title: str) -> None:
     print(f"\n== {title}  브라켓 {len(results)}개")
     if not results:
         return
-    print(f"{'#':>2s} {'자세':6s} {'색':3s} {'판정':8s} {'어두운px':>7s}   x mm    y mm    z mm |  베이스 Rx  Ry  Rz |  물체축 Rx  Ry  Rz")
+    print(f"{'#':>2s} {'자세':6s} {'색':3s} {'판정':8s} {'어두운px':>7s} {'테두리':>6s}   x mm    y mm    z mm |  베이스 Rx  Ry  Rz |  물체축 Rx  Ry  Rz")
     for k, r in enumerate(results):
         xyz, rb, ro = r["pendant"]
-        print(f"{k:>2d} {r['pose']:6s} {'흰' if r['white'] else '검':3s} {r['verdict']:8s} {r['dark_px']:>7d}  "
+        print(f"{k:>2d} {r['pose']:6s} {'흰' if r['white'] else '검':3s} {r['verdict']:8s} {r['dark_px']:>7d} {r['edge_px']:6.2f}  "
               f"{xyz[0]:6.1f}  {xyz[1]:6.1f}  {xyz[2]:6.1f} | {rb[0]:6.1f} {rb[1]:6.1f} {rb[2]:6.1f} | "
               f"{ro[0]:6.1f} {ro[1]:6.1f} {ro[2]:6.1f}")
 

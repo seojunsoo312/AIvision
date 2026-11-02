@@ -38,6 +38,18 @@ HOLE_MARGIN_MM = 1.0
 # 자세가 1 px 쯤 어긋나도 구멍 가장자리 그림자가 새지 않게, 뺄 구멍 자리를 화면에서 이만큼 더 넓힌다
 HOLE_GROW_PX = 1
 _SLOT_HALF_LEN, _SLOT_HALF_W, _PLATE_HALF_T = 8.5, 4.25, 2.0
+# 젯슨 시험 (2026-11-02) 에서 나온 오판을 막는 규칙. 어두운 픽셀을 덩어리로 묶어서 본다.
+# 1) 덩어리 전체가 구멍 자리에서 HOLE_SHADOW_PX 안에 있으면 구멍 가장자리 그늘 (자세가 1~2 px 어긋날 때) → 무시.
+#    4 px 로 하면 구멍 바로 옆에 칠한 실제 마커 2장을 놓쳤다.
+#    구멍 옆에서 시작해 바깥으로 이어지는 마커는 그 바깥 부분이 남아서 잡힌다.
+HOLE_SHADOW_PX = 2
+# 2) 덩어리가 브라켓 윤곽 (OUTSIDE_PX 넓힘) 밖에도 EXTERNAL_MIN_PX 개 이상 있으면 브라켓 위를 지나는 다른 물체 (로봇 케이블) → 무시.
+#    브라켓 가장자리에 칠한 마커는 바깥이 밝은 책상이라 걸리지 않는다.
+OUTSIDE_PX = 4
+EXTERNAL_MIN_PX = 8
+# 3) 테두리 자동 맞춤 뒤에도 윤곽이 사진 테두리와 평균 이만큼 넘게 떨어지면 브라켓이 아니다 (책상 볼트 구멍을 잘못 찾은 것 등).
+#    진짜 브라켓 0.1~1.7 px, 가짜 4.6~4.8 px 였다.
+EDGE_FAKE_PX = 3.0
 
 
 def _in_hole_zone(p: np.ndarray) -> np.ndarray:
@@ -48,8 +60,10 @@ def _in_hole_zone(p: np.ndarray) -> np.ndarray:
     return near_y & (bottom | upright)
 
 
-def bracket_region(T_base: np.ndarray, cam, shape: tuple[int, int]) -> np.ndarray:
+def bracket_region(T_base: np.ndarray, cam, shape: tuple[int, int], parts: bool = False):
     """검사할 픽셀: 자세의 CAD 윤곽 안쪽 (테두리 ERODE_PX 줄임) 에서 구멍 자리를 뺀 것.
+
+    parts=True 면 (검사 영역, 구멍 자리, 윤곽 전체) 셋을 돌려준다.
 
     픽셀마다 카메라에서 광선을 쏴 CAD 에 처음 닿는 곳이 구멍 벽 · 구멍 둘레이거나, 구멍을 지나 아무것도 안 닿으면 뺀다.
     """
@@ -58,7 +72,9 @@ def bracket_region(T_base: np.ndarray, cam, shape: tuple[int, int]) -> np.ndarra
     from yolo.train import kpt_label as KL
 
     # 바깥 테두리만 줄인다 (구멍 쪽은 줄이지 않는다: 구멍 바로 옆 마커도 봐야 한다)
-    mk = cv2.erode(KL._silhouette(T_base, cam, shape, (0, 0)), np.ones((2 * ERODE_PX + 1,) * 2, np.uint8))
+    sil = KL._silhouette(T_base, cam, shape, (0, 0))
+    mk = cv2.erode(sil, np.ones((2 * ERODE_PX + 1,) * 2, np.uint8))
+    hole = np.zeros_like(mk)
     ys, xs = np.nonzero(mk)
     if len(xs):
         n = cv2.undistortPoints(np.stack([xs, ys], 1).astype(np.float64).reshape(-1, 1, 2), cam.K, cam.dist).reshape(-1, 2)
@@ -70,17 +86,49 @@ def bracket_region(T_base: np.ndarray, cam, shape: tuple[int, int]) -> np.ndarra
         hit = np.isfinite(t)
         p = o + d * np.where(hit, t, 0.0)[:, None]
         drop = ~hit | _in_hole_zone(p)
-        hole = np.zeros_like(mk)
         hole[ys[drop], xs[drop]] = 1
         if HOLE_GROW_PX > 0:
             hole = cv2.dilate(hole, np.ones((2 * HOLE_GROW_PX + 1,) * 2, np.uint8))
         mk[hole > 0] = 0
-    return mk
+    return (mk, hole, sil) if parts else mk
 
 
-def dark_count(bgr: np.ndarray, region: np.ndarray) -> int:
-    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    return int(((g < DARK_LEVEL) & (region > 0)).sum())
+def marker_pixels(bgr: np.ndarray, region: np.ndarray, hole: np.ndarray | None = None,
+                  sil: np.ndarray | None = None) -> np.ndarray:
+    """마커로 셀 픽셀 (bool). 검사 영역 안 어두운 픽셀에서 구멍 그늘 · 바깥 물체 덩어리를 뺀 것 (위 1) 2) 규칙).
+
+    hole · sil 이 없으면 규칙 없이 영역 안 어두운 픽셀 전부.
+    """
+    dark = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) < DARK_LEVEL
+    inside = dark & (region > 0)
+    if hole is None or sil is None or not inside.any():
+        return inside
+    ys, xs = np.nonzero(sil)
+    H, W = dark.shape
+    x0, y0 = max(0, xs.min() - 40), max(0, ys.min() - 40)
+    x1, y1 = min(W, xs.max() + 41), min(H, ys.max() + 41)
+    win = dark[y0:y1, x0:x1].astype(np.uint8)
+    n, lab = cv2.connectedComponents(win, connectivity=8)
+    hole_near = cv2.dilate(hole[y0:y1, x0:x1], np.ones((2 * HOLE_SHADOW_PX + 1,) * 2, np.uint8)) > 0
+    outside = cv2.dilate(sil[y0:y1, x0:x1], np.ones((2 * OUTSIDE_PX + 1,) * 2, np.uint8)) == 0
+    ins = inside[y0:y1, x0:x1]
+    keep = np.zeros_like(ins)
+    for k in np.unique(lab[ins]):
+        comp = lab == k
+        c_in = comp & ins
+        if (comp & outside).sum() >= EXTERNAL_MIN_PX:
+            continue  # 브라켓 밖으로 이어지는 케이블 · 다른 물체
+        if not (c_in & ~hole_near).any():
+            continue  # 구멍 바로 둘레에만 있는 그늘
+        keep |= c_in
+    out = np.zeros_like(inside)
+    out[y0:y1, x0:x1] = keep
+    return out
+
+
+def dark_count(bgr: np.ndarray, region: np.ndarray, hole: np.ndarray | None = None,
+               sil: np.ndarray | None = None) -> int:
+    return int(marker_pixels(bgr, region, hole, sil).sum())
 
 
 def draw_marker(bgr: np.ndarray, region: np.ndarray, width: float, length: float, rng,
@@ -133,14 +181,21 @@ def inspect(bgr: np.ndarray, model, cam) -> list[dict]:
             continue
         res = KL.fit_edges(bgr, cam.T_base_cam @ inst.T_cam_obj, cam)
         T = res[0] if res is not None else cam.T_base_cam @ inst.T_cam_obj
+        edge_px = float(res[1]) if res is not None else float("inf")
         KL.set_pose(inst, T, cam, KL.SRC_SAVED)
         KL.fit(inst, cam, W, H)
-        reg = bracket_region(T, cam, (H, W))
+        reg, hole, sil = bracket_region(T, cam, (H, W), parts=True)
         white = bool(reg.sum() > 50 and np.median(g[reg > 0]) > WHITE_MEDIAN)
-        n = dark_count(bgr, reg)
-        verdict = ("불량" if n >= MIN_DARK_PX else "양품") if white else "검사 안 함"
+        marks = marker_pixels(bgr, reg, hole, sil)
+        n = int(marks.sum())
+        if edge_px > EDGE_FAKE_PX:
+            verdict = "브라켓 아님"
+        elif not white:
+            verdict = "검사 안 함"
+        else:
+            verdict = "불량" if n >= MIN_DARK_PX else "양품"
         out.append({"box": inst.box, "pose": KL.CLASS_KO[inst.cls], "white": white, "dark_px": n,
-                    "verdict": verdict, "region": reg, "T_base": T})
+                    "edge_px": edge_px, "verdict": verdict, "region": reg, "marks": marks, "T_base": T})
     return out
 
 
@@ -155,8 +210,8 @@ def run_real(folder: Path) -> None:
     model = YOLO(str(POSE_WEIGHTS))
     images = sorted(list(folder.glob("*.jpg")) + list(folder.glob("*.png")))
     print(f"사진 {len(images)}장 ({folder})   규칙: 회색 < {DARK_LEVEL} 픽셀 {MIN_DARK_PX} 개 이상이면 불량 (흰 브라켓만)")
-    print(f"{'사진':28s} {'브라켓':>4s} {'자세':6s} {'색':3s} {'어두운 px':>8s}  판정")
-    tiles, count = [], {"양품": 0, "불량": 0, "검사 안 함": 0}
+    print(f"{'사진':28s} {'브라켓':>4s} {'자세':6s} {'색':3s} {'어두운 px':>8s} {'테두리':>6s}  판정")
+    tiles, count = [], {"양품": 0, "불량": 0, "검사 안 함": 0, "브라켓 아님": 0}
     for p in images:
         bgr = cv2.imread(str(p))
         found = inspect(bgr, model, cam)
@@ -165,7 +220,8 @@ def run_real(folder: Path) -> None:
         g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         for k, r in enumerate(found):
             count[r["verdict"]] += 1
-            print(f"{p.name:28s} {k:>4d} {r['pose']:6s} {'흰' if r['white'] else '검':3s} {r['dark_px']:>8d}  {r['verdict']}")
+            print(f"{p.name:28s} {k:>4d} {r['pose']:6s} {'흰' if r['white'] else '검':3s} {r['dark_px']:>8d} "
+                  f"{r['edge_px']:6.2f}  {r['verdict']}")
             reg = r["region"]
             sil = KL._silhouette(r["T_base"], cam, reg.shape, (0, 0))
             ys, xs = np.nonzero(sil)
@@ -177,7 +233,7 @@ def run_real(folder: Path) -> None:
             ov = a.copy()
             ov[reg[y0:y1, x0:x1] > 0] = (0, 200, 0)
             b = cv2.addWeighted(a, 0.75, ov, 0.25, 0)
-            b[((g < DARK_LEVEL) & (reg > 0))[y0:y1, x0:x1]] = (0, 0, 255)
+            b[r["marks"][y0:y1, x0:x1]] = (0, 0, 255)
             A = cv2.resize(a, (240, 240), interpolation=cv2.INTER_CUBIC)
             B = cv2.resize(b, (240, 240), interpolation=cv2.INTER_NEAREST)
             put_text(B, f"{r['dark_px']}px → {r['verdict']}", (4, 20), 0.6, (0, 0, 255), 2)
@@ -221,11 +277,11 @@ def main() -> None:
                 if inst.T_cam_obj is None:
                     continue
                 T = cam.T_base_cam @ inst.T_cam_obj
-                reg = bracket_region(T, cam, (H, W))
+                reg, hole, sil = bracket_region(T, cam, (H, W), parts=True)
                 g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
                 if reg.sum() > 50 and np.median(g[reg > 0]) > 150:  # 흰 브라켓만
-                    whites.append((img.name, bgr, reg))
-    good = [dark_count(b, r) for _, b, r in whites]
+                    whites.append((img.name, bgr, reg, hole, sil))
+    good = [dark_count(b, r, h, sl) for _, b, r, h, sl in whites]
     # 그림: 1줄 양품, 2~4줄 선 2x8 mm 진함 · 중간 · 연함, 5줄 점 4 mm 중간
     show = {"양품": [], ("진함", 2.0, 8): [], ("중간", 2.0, 8): [], ("연함", 2.0, 8): [], ("중간", 4.0, 0): []}
 
@@ -236,8 +292,8 @@ def main() -> None:
         put_text(crop, text, (4, 20), 0.5, (0, 0, 255), 1)
         return crop
 
-    for name, bgr, reg in whites[::5][:6]:
-        show["양품"].append(tile(bgr, reg, f"양품: {dark_count(bgr, reg)}"))
+    for name, bgr, reg, hole, sil in whites[::5][:6]:
+        show["양품"].append(tile(bgr, reg, f"양품: {dark_count(bgr, reg, hole, sil)}"))
     rows = [f"흰 브라켓 {len(whites)}개.  양품(원본) 어두운 픽셀 수: 최대 {max(good)}, 중앙값 {int(np.median(good))}",
             "잡은 수 / 시도 (흰 브라켓 30개 × 3번)   | " + " | ".join(f"{k} (회색 {a}~{b})" for k, (a, b) in INKS.items())]
     result = {"good_max": int(max(good)), "strokes": {}}
@@ -246,12 +302,12 @@ def main() -> None:
         cells = []
         for ink_name, ink in INKS.items():
             counts = []
-            for name, bgr, reg in whites:
+            for name, bgr, reg, hole, sil in whites:
                 for rep_i in range(3):
                     d = draw_marker(bgr, reg, w, L, rng, ink)
                     if d is None:
                         continue
-                    counts.append(dark_count(d, reg))
+                    counts.append(dark_count(d, reg, hole, sil))
                     key = (ink_name, w, L)
                     if key in show and len(show[key]) < 6 and rep_i == 0:
                         verdict = "불량" if counts[-1] >= MIN_DARK_PX else "양품"

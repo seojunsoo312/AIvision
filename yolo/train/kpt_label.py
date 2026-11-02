@@ -344,11 +344,47 @@ def _silhouette(T_base: np.ndarray, cam: Camera, shape: tuple[int, int], off: tu
     return mk
 
 
-def fit_edges(bgr: np.ndarray, T_base: np.ndarray, cam: Camera, margin: int = 25) -> tuple[np.ndarray, float, float] | None:
+def slot_rims_mm(step_mm: float = 0.7) -> np.ndarray:
+    """두 판의 긴 구멍 (길이 17, 폭 8.5, 가운데 22) 테두리 점들 (CAD mm). 판 양쪽 면 모두."""
+    half_len, r = 8.5, 4.25
+    straight = half_len - r
+    pts2 = []
+    n_s = max(2, int(2 * straight / step_mm))
+    for sgn in (-1.0, 1.0):
+        a = np.linspace(-straight, straight, n_s)
+        pts2.append(np.stack([a, np.full_like(a, sgn * r)], 1))
+    n_c = max(4, int(np.pi * r / step_mm))
+    t = np.linspace(-np.pi / 2, np.pi / 2, n_c)
+    for sgn in (-1.0, 1.0):  # 양 끝 반원: 오른쪽 끝은 +x 로, 왼쪽 끝은 -x 로 볼록
+        pts2.append(np.stack([sgn * (straight + r * np.cos(t)), r * np.sin(t)], 1))
+    ring = np.vstack(pts2)  # (긴 방향, y)
+    out = []
+    for face in (-2.0, 2.0):
+        out.append(np.stack([22.0 + ring[:, 0], ring[:, 1], np.full(len(ring), face)], 1))   # 바닥 판 (z 면)
+        out.append(np.stack([np.full(len(ring), face), ring[:, 1], 22.0 + ring[:, 0]], 1))   # 세운 판 (x 면)
+    return np.vstack(out)
+
+
+def _visible_points(T_base: np.ndarray, pts: np.ndarray, cam: Camera, tol_mm: float = 0.8) -> np.ndarray:
+    """카메라에서 보이는 CAD 점 (브라켓 자기 몸에 안 가려진 것)."""
+    import open3d as o3d
+
+    cam_in_obj = (np.linalg.inv(T_base) @ cam.T_base_cam)[:3, 3]
+    d = pts - cam_in_obj
+    dist = np.linalg.norm(d, axis=1)
+    rays = np.hstack([np.broadcast_to(cam_in_obj, d.shape), d / dist[:, None]]).astype(np.float32)
+    t = _ray_scene().cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy()
+    return t >= dist - tol_mm
+
+
+def fit_edges(bgr: np.ndarray, T_base: np.ndarray, cam: Camera, margin: int = 25,
+              holes: bool = True) -> tuple[np.ndarray, float, float] | None:
     """책상 위 자세 T_base 에서 출발해 CAD 윤곽선이 사진 테두리선(Canny)에 붙도록 x, y, 각도를 다듬는다.
 
     (새 T_base, 맞춘 뒤 평균 거리 px, 움직인 거리 px). 자세 종류(방향 후보)는 출발 자세에 가장 가까운 것으로 둔다.
     흰 책상 위 흰 브라켓도 테두리선은 잡혀서 색과 상관없이 쓴다.
+    holes=True 면 보이는 긴 구멍 테두리도 같이 맞춘다. 바깥 윤곽만 맞추면 비스듬히 놓인 브라켓에서 구멍 자리가
+    1~2 px 밀려, 불량 검사가 구멍 안쪽 벽 그늘을 마커로 셌다 (젯슨 시험 2026-11-02).
     """
     best = None
     for cid, A, z in desk_candidates():
@@ -369,14 +405,25 @@ def fit_edges(bgr: np.ndarray, T_base: np.ndarray, cam: Camera, margin: int = 25
     g = cv2.GaussianBlur(cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY), (3, 3), 0)
     edges = cv2.Canny(g, 10, 30)
     dt = cv2.distanceTransform((edges == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    rims = None
+    if holes:
+        rim_all = slot_rims_mm()
+        rims = rim_all[_visible_points(T_base, rim_all, cam)]
+        if len(rims) < 10:
+            rims = None
 
     def cost(q):
-        cs, _ = cv2.findContours(_silhouette(desk_pose(A, z, *q), cam, g.shape, (x0, y0)),
-                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        Tq = desk_pose(A, z, *q)
+        cs, _ = cv2.findContours(_silhouette(Tq, cam, g.shape, (x0, y0)), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         if not cs:
             return 1e9
         c = np.vstack(cs).reshape(-1, 2)
-        return float(np.minimum(dt[c[:, 1], c[:, 0]], EDGE_CAP_PX).mean())
+        vals = np.minimum(dt[c[:, 1], c[:, 0]], EDGE_CAP_PX)
+        if rims is not None:
+            uv = np.round(project_base(Tq, rims, cam) - [x0, y0]).astype(int)
+            ok = (uv[:, 0] >= 0) & (uv[:, 1] >= 0) & (uv[:, 0] < g.shape[1]) & (uv[:, 1] < g.shape[0])
+            vals = np.concatenate([vals, np.minimum(dt[uv[ok, 1], uv[ok, 0]], EDGE_CAP_PX)])
+        return float(vals.mean())
 
     start = prm.copy()
     cur = cost(prm)
