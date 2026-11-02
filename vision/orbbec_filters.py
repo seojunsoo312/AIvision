@@ -64,6 +64,8 @@ class OrbbecFilterPanel:
     """RGB-D 미리보기와 분리된 필터 패널. 라벨·ON/OFF·슬라이더를 한 행에 그린다."""
 
     W = 720
+    # 화면에 띄울 때 크기 비율. 그리기·클릭 판정은 원래 크기 좌표로 한다.
+    SCALE = 0.7
     PAD = 14
     FOOTER_PAD = 28  # Temporal Diff 아래 여유
     HEADER_H = 44
@@ -194,6 +196,8 @@ class OrbbecFilterPanel:
         return float(min(hi, max(lo, raw)))
 
     def _on_mouse(self, event, x, y, flags, _userdata) -> None:
+        x = int(round(x / self.SCALE))
+        y = int(round(y / self.SCALE))
         if event == cv2.EVENT_LBUTTONDOWN:
             for hit in self._hits:
                 if not self._in_rect(x, y, hit["rect"]):
@@ -453,6 +457,8 @@ class OrbbecFilterPanel:
                 v["temporal"],
                 "{:.3f}",
             )
+        if self.SCALE != 1.0:
+            img = cv2.resize(img, None, fx=self.SCALE, fy=self.SCALE, interpolation=cv2.INTER_AREA)
         cv2.imshow(FILTER_WIN, img)
 
     def close(self) -> None:
