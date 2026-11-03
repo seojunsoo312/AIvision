@@ -34,7 +34,7 @@ _SS = 4
 
 # 구멍 자리 (CAD mm): 두 판 모두 길이 17 (가운데 22), 폭 8.5, 판 두께 4. 둘레 HOLE_MARGIN_MM 까지 뺀다.
 # 비스듬히 놓이면 구멍 안을 들여다보게 되어 안쪽 그림자가 마커만큼 어둡다.
-HOLE_MARGIN_MM = 1.0
+HOLE_MARGIN_MM = 0.5
 # 자세가 1 px 쯤 어긋나도 구멍 가장자리 그림자가 새지 않게, 뺄 구멍 자리를 화면에서 이만큼 더 넓힌다
 HOLE_GROW_PX = 1
 _SLOT_HALF_LEN, _SLOT_HALF_W, _PLATE_HALF_T = 8.5, 4.25, 2.0
@@ -43,11 +43,12 @@ _SLOT_HALF_LEN, _SLOT_HALF_W, _PLATE_HALF_T = 8.5, 4.25, 2.0
 #    4 px 로 하면 구멍 바로 옆에 칠한 실제 마커 2장을 놓쳤다.
 #    구멍 옆에서 시작해 바깥으로 이어지는 마커는 그 바깥 부분이 남아서 잡힌다.
 HOLE_SHADOW_PX = 2
-# 2) 덩어리가 브라켓 윤곽 (OUTSIDE_PX 넓힘) 밖에도 EXTERNAL_MIN_PX 개 이상 있으면 브라켓 위를 지나는 다른 물체 (로봇 케이블) → 무시.
-#    브라켓 가장자리에 칠한 마커는 바깥이 밝은 책상이라 걸리지 않는다.
-OUTSIDE_PX = 4
-EXTERNAL_MIN_PX = 8
-# 3) 테두리 자동 맞춤 뒤에도 윤곽이 사진 테두리와 평균 이만큼 넘게 떨어지면 브라켓이 아니다 (책상 볼트 구멍을 잘못 찾은 것 등).
+# 2) 덩어리가 브라켓 윤곽 밖으로 EXTERNAL_DIST_PX 넘게 뻗어 나가면 브라켓 위를 지나는 다른 물체 (로봇 케이블) → 무시.
+#    케이블은 밖으로 24~116 px 뻗었다. 모서리에 닿게 칠한 마커는 자세 오차만큼 (몇 px) 만 나간다 (2차 젯슨 시험).
+EXTERNAL_DIST_PX = 6
+# 3) 센 덩어리는 바깥 테두리 띠 (ERODE_PX) 에 걸친 부분까지 이어서 센다. 모서리에 닿게 칠한 마커가 띠 안에 대부분 있었다.
+#    띠에만 있는 어두운 것 (책상 그림자) 은 안쪽에 시작점이 없어 세지 않는다.
+# 4) 테두리 자동 맞춤 뒤에도 윤곽이 사진 테두리와 평균 이만큼 넘게 떨어지면 브라켓이 아니다 (책상 볼트 구멍을 잘못 찾은 것 등).
 #    진짜 브라켓 0.1~1.7 px, 가짜 4.6~4.8 px 였다.
 EDGE_FAKE_PX = 3.0
 
@@ -110,17 +111,19 @@ def marker_pixels(bgr: np.ndarray, region: np.ndarray, hole: np.ndarray | None =
     win = dark[y0:y1, x0:x1].astype(np.uint8)
     n, lab = cv2.connectedComponents(win, connectivity=8)
     hole_near = cv2.dilate(hole[y0:y1, x0:x1], np.ones((2 * HOLE_SHADOW_PX + 1,) * 2, np.uint8)) > 0
-    outside = cv2.dilate(sil[y0:y1, x0:x1], np.ones((2 * OUTSIDE_PX + 1,) * 2, np.uint8)) == 0
+    s_win = sil[y0:y1, x0:x1]
+    dist_out = cv2.distanceTransform((s_win == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    band = (s_win > 0) & (region[y0:y1, x0:x1] == 0) & (hole[y0:y1, x0:x1] == 0)  # 바깥 테두리 띠
     ins = inside[y0:y1, x0:x1]
     keep = np.zeros_like(ins)
     for k in np.unique(lab[ins]):
         comp = lab == k
         c_in = comp & ins
-        if (comp & outside).sum() >= EXTERNAL_MIN_PX:
-            continue  # 브라켓 밖으로 이어지는 케이블 · 다른 물체
+        if dist_out[comp].max() > EXTERNAL_DIST_PX:
+            continue  # 브라켓 밖으로 길게 이어지는 케이블 · 다른 물체
         if not (c_in & ~hole_near).any():
             continue  # 구멍 바로 둘레에만 있는 그늘
-        keep |= c_in
+        keep |= c_in | (comp & band)
     out = np.zeros_like(inside)
     out[y0:y1, x0:x1] = keep
     return out
@@ -161,7 +164,13 @@ def draw_marker(bgr: np.ndarray, region: np.ndarray, width: float, length: float
     return None
 
 
-POSE_WEIGHTS = ROOT.parent / "vision" / "sim" / "out" / "pose_runs" / "v4n_ft" / "weights" / "best.pt"
+def _default_weights() -> Path:
+    from yolo.train.kpt_label import pick_weights
+
+    return pick_weights()
+
+
+POSE_WEIGHTS = _default_weights()
 # 흰 브라켓으로 볼 검사 영역 밝기 (중앙값). 검은 브라켓은 검사하지 않는다.
 WHITE_MEDIAN = 150
 
@@ -199,7 +208,7 @@ def inspect(bgr: np.ndarray, model, cam) -> list[dict]:
     return out
 
 
-def run_real(folder: Path) -> None:
+def run_real(folder: Path, weights: Path = POSE_WEIGHTS) -> None:
     """폴더 안 사진마다 판정해 터미널에 표로, 바탕화면에 그림으로."""
     from ultralytics import YOLO
 
@@ -207,7 +216,7 @@ def run_real(folder: Path) -> None:
     from yolo.train import kpt_label as KL
 
     cam = KL.load_camera(SEAT / "images")
-    model = YOLO(str(POSE_WEIGHTS))
+    model = YOLO(str(weights))
     images = sorted(list(folder.glob("*.jpg")) + list(folder.glob("*.png")))
     print(f"사진 {len(images)}장 ({folder})   규칙: 회색 < {DARK_LEVEL} 픽셀 {MIN_DARK_PX} 개 이상이면 불량 (흰 브라켓만)")
     print(f"{'사진':28s} {'브라켓':>4s} {'자세':6s} {'색':3s} {'어두운 px':>8s} {'테두리':>6s}  판정")
@@ -253,9 +262,10 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description="흰 브라켓 마커 불량 검사 (규칙 기반)")
     ap.add_argument("--real", type=Path, default=None, help="이 폴더의 실제 사진을 판정 (없으면 합성 시험)")
+    ap.add_argument("--weights", type=Path, default=POSE_WEIGHTS, help="자세 모델 가중치 (--real 일 때)")
     args = ap.parse_args()
     if args.real is not None:
-        run_real(args.real)
+        run_real(args.real, args.weights)
         return
 
     from vision.text import put_text

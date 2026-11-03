@@ -19,6 +19,7 @@
 
 키: 0~9 번호 고르기 · h 가려짐 · x 지우기 · g 책상 붙이기 켜기/끄기 · b 화면 밝게 (끔 → 밝게 → 어두운 곳 늘리기, 보기만)
     f 테두리 자동 맞춤 (지금 자세에서 출발해 CAD 윤곽선이 사진 테두리선에 붙도록 위치 · 각도를 다듬음. 자세 종류는 안 바꿈)
+    k 자세 바꾸기 (같은 자리에서 다른 자세 종류를 놓아 보고 테두리와 가장 잘 맞는 것으로. 세우기 ↔ 눕히기 ↔ 비스듬히)
     a 브라켓 추가 · Tab 다음 브라켓 · D 브라켓 삭제
     u/우클릭 되돌리기 · s 저장 · n/p 다음/이전 사진(저장) · q 저장 후 끝
 
@@ -49,7 +50,23 @@ from vision.sim.keypoints import KEYPOINTS_CAD_MM, KPT_SET, N_KPT, canonical_T  
 from vision.text import put_text  # noqa: E402
 
 KPT_DIR = ROOT / "datasets" / "kpt"
-DEFAULT_WEIGHTS = ROOT.parent / "vision" / "sim" / "out" / "pose_runs" / "v4n" / "weights" / "best.pt"
+POSE_RUNS = ROOT.parent / "vision" / "sim" / "out" / "pose_runs"
+# 자세 모델 가중치: 있는 것 중 앞의 것을 쓴다 (git 에 없어 보드마다 복사해 둔다).
+#   v4n_ft2 = 학생 자리 30장 + 젯슨 2차 42장으로 미세조정 (2026-11-02, 지금 기본)
+#   v4n_ft  = 학생 자리 30장으로 미세조정,  v4n = 시뮬만
+WEIGHT_ORDER = ("v4n_ft2", "v4n_ft", "v4n")
+
+
+def pick_weights() -> Path:
+    """있는 가중치 중 가장 나은 것. 하나도 없으면 첫 번째 (없는) 경로를 돌려준다 (부르는 쪽이 안내)."""
+    for name in WEIGHT_ORDER:
+        path = POSE_RUNS / name / "weights" / "best.pt"
+        if path.is_file():
+            return path
+    return POSE_RUNS / WEIGHT_ORDER[0] / "weights" / "best.pt"
+
+
+DEFAULT_WEIGHTS = pick_weights()
 WIN = "keypoint label"
 # 미리 찍기 모델의 박스 신뢰도 문턱. 0.25 면 로봇 서보 · 나사 머리도 잡혔다.
 MODEL_CONF = 0.5
@@ -442,6 +459,57 @@ def fit_edges(bgr: np.ndarray, T_base: np.ndarray, cam: Camera, margin: int = 25
     moved = float(np.linalg.norm(project_base(T_new, KEYPOINTS_CAD_MM, cam)
                                  - project_base(desk_pose(A, z, *start), KEYPOINTS_CAD_MM, cam), axis=1).max())
     return T_new, cur, moved
+
+
+def refit_other_class(bgr: np.ndarray, T_base: np.ndarray, cam: Camera, cur_cls: int,
+                      yaw_step_deg: float = 10.0) -> tuple[np.ndarray, int, float] | None:
+    """같은 자리에서 다른 자세 종류 (세우기 · 눕히기 · 비스듬히 중 cur_cls 가 아닌 것) 를 모두 놓아 보고,
+    CAD 윤곽이 사진 테두리선과 가장 잘 맞는 것을 테두리 자동 맞춤으로 다듬어 돌려준다. (T_base, 클래스, 평균 거리 px)."""
+    v, _ = mesh_mm()
+    center = (T_base[:3, :3] @ v.mean(axis=0)) + T_base[:3, 3]
+    H, W = bgr.shape[:2]
+    pv = project_base(T_base, v, cam)
+    x0, y0 = np.maximum((pv.min(axis=0) - 40).astype(int), 0)
+    x1, y1 = np.minimum((pv.max(axis=0) + 40).astype(int), [W, H])
+    g = cv2.GaussianBlur(cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY), (3, 3), 0)
+    dt = cv2.distanceTransform((cv2.Canny(g, 10, 30) == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    trials = []
+    for cid, A, z in desk_candidates():
+        if cid == cur_cls:
+            continue
+        cm = A[:3, :3] @ v.mean(axis=0) + A[:3, 3]
+        for yaw in np.deg2rad(np.arange(0.0, 360.0, yaw_step_deg)):
+            c = _Rz(yaw)[:3, :3] @ cm
+            T = desk_pose(A, z, center[0] - c[0], center[1] - c[1], yaw)
+            cs, _ = cv2.findContours(_silhouette(T, cam, g.shape, (x0, y0)), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if not cs:
+                continue
+            q = np.vstack(cs).reshape(-1, 2)
+            trials.append((float(np.minimum(dt[q[:, 1], q[:, 0]], EDGE_CAP_PX).mean()), cid, T))
+    if not trials:
+        return None
+
+    def edge_cost(T):
+        cs, _ = cv2.findContours(_silhouette(T, cam, g.shape, (x0, y0)), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if not cs:
+            return 1e9
+        q = np.vstack(cs).reshape(-1, 2)
+        return float(np.minimum(dt[q[:, 1], q[:, 0]], EDGE_CAP_PX).mean())
+
+    # 틀린 자세의 자리에서 출발하므로 위치도 ±10 mm 둘러본다 (좋은 각도 후보 몇 개만)
+    moved = []
+    for _e, cid, T in sorted(trials, key=lambda t: t[0])[:6]:
+        for dx in (-10.0, -5.0, 0.0, 5.0, 10.0):
+            for dy in (-10.0, -5.0, 0.0, 5.0, 10.0):
+                Tm = T.copy()
+                Tm[:2, 3] += (dx, dy)
+                moved.append((edge_cost(Tm), cid, Tm))
+    best = None
+    for _e, cid, T in sorted(moved, key=lambda t: t[0])[:4]:
+        res = fit_edges(bgr, T, cam)
+        if res is not None and (best is None or res[1] < best[2]):
+            best = (res[0], cid, res[1])
+    return best
 
 
 def set_pose(inst: Instance, T_base: np.ndarray, cam: Camera, src: int) -> None:
@@ -936,6 +1004,21 @@ class Session:
             self.note = f"자동 맞춤: 테두리와 평균 {dist:.1f} px, {moved:.1f} px 움직임"
             if dist > EDGE_WARN_PX:
                 self.note += "  (불확실: 윤곽 확인, 아니면 u)"
+        elif k == ord("k") and inst is not None:
+            if inst.T_cam_obj is None or self.img is None:
+                self.note = "자세 바꾸기는 윤곽이 먼저 있어야 합니다"
+                return
+            res = refit_other_class(self.img, self.cam.T_base_cam @ inst.T_cam_obj, self.cam, inst.cls)
+            if res is None:
+                self.note = "다른 자세로 맞추기 실패"
+                return
+            self.push()
+            T_new, cid, dist = res
+            old = CLASS_KO[inst.cls]
+            inst.desk = True
+            set_pose(inst, T_new, self.cam, SRC_EDITED)
+            self.refit()
+            self.note = f"자세 바꿈: {old} → {CLASS_KO[inst.cls]} (테두리 {dist:.1f} px). 아니면 k 한 번 더 또는 u"
         elif k == ord("g") and inst is not None:
             self.push()
             inst.desk = not inst.desk
@@ -1021,11 +1104,12 @@ class Session:
             put_text(bar, line, (10, y), 0.65, (80, 80, 255), 2)
             y += 28
         help_lines = ["클릭 = 지금 번호 찍기,  끌기 = 옮기기", "0~9 번호   h 가려짐   x 지우기",
-                      "f 테두리 자동 맞춤   g 책상 붙이기   b 밝게", "a 브라켓 추가   Tab 다음   D 삭제",
+                      "f 테두리 자동 맞춤   k 자세 바꾸기", "g 책상 붙이기   b 밝게   a 브라켓 추가",
+                      "Tab 다음 브라켓   D 삭제",
                       "u / 우클릭 되돌리기", "s 저장   n / p 다음 · 이전 사진   q 끝"]
         x_help = bar.shape[1] - 420
         for k, line in enumerate(help_lines):
-            put_text(bar, line, (x_help, 26 + 27 * k), 0.58, (230, 230, 230), 1)
+            put_text(bar, line, (x_help, 24 + 24 * k), 0.56, (230, 230, 230), 1)
         zoom = zoom_view(bgr, self.insts, self.sel, self.cur, self.hover) if self.hover is not None else None
         panel = guide_panel(self.cur, vis.shape[0], zoom)
         return np.vstack([bar, np.hstack([vis, panel])])

@@ -35,9 +35,6 @@ import numpy as np  # noqa: E402
 
 from vision.text import put_text  # noqa: E402
 
-RUNS = ROOT.parent / "vision" / "sim" / "out" / "pose_runs"
-DEFAULT_WEIGHTS = RUNS / "v4n_ft" / "weights" / "best.pt"
-FALLBACK_WEIGHTS = RUNS / "v4n" / "weights" / "best.pt"
 LIVE_DIR = ROOT / "datasets" / "live"
 WIN = "keypoint live"
 OUTLINE_BGR = (255, 200, 0)
@@ -136,7 +133,7 @@ def print_results(results: list[dict], title: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="실시간 키포인트 자세 · 불량 검사")
-    ap.add_argument("--weights", default=None, help=f"기본: {DEFAULT_WEIGHTS.relative_to(ROOT.parent)} (없으면 v4n)")
+    ap.add_argument("--weights", default=None, help="기본: pose_runs 의 v4n_ft2 → v4n_ft → v4n 중 있는 것")
     ap.add_argument("--images", type=Path, default=None, help="카메라 대신 이 폴더의 사진")
     ap.add_argument("--calib", type=Path, default=None,
                     help="캘리브 폴더 (intrinsics.json, eye_to_hand.json). 기본: 이 보드의 vision/calib_data")
@@ -146,9 +143,9 @@ def main() -> None:
 
     from yolo.train import kpt_label as KL
 
-    weights = Path(args.weights) if args.weights else (DEFAULT_WEIGHTS if DEFAULT_WEIGHTS.is_file() else FALLBACK_WEIGHTS)
+    weights = Path(args.weights) if args.weights else KL.pick_weights()
     if not weights.is_file():
-        raise SystemExit(f"가중치가 없습니다: {weights}\n노트북의 vision/sim/out/pose_runs/v4n_ft/weights/best.pt 를 같은 자리에 복사하세요.")
+        raise SystemExit(f"가중치가 없습니다: {weights}\n노트북의 vision/sim/out/pose_runs/v4n_ft2/weights/best.pt 를 같은 자리에 복사하세요.")
     model = YOLO(str(weights))
     cam = KL.calib_camera(args.calib)
     print(f"가중치 {weights}\n캘리브 {cam.source}  (카메라 높이 {cam.T_base_cam[2, 3]:.0f} mm)")
