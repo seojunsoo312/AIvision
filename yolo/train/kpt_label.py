@@ -705,7 +705,8 @@ def load_labels(path: Path, width: int, height: int) -> list[Instance]:
 def model_guess(model, bgr: np.ndarray, cam: Camera) -> list[Instance]:
     """모델이 찾은 브라켓 → 미리 찍힌 점. 자동 점은 빼고, 자세로 볼 때 브라켓 몸에 가려진 점은 '가려짐'.
     모델은 가려진 점도 높은 신뢰도로 찍어서 신뢰도로는 못 가린다."""
-    r = model.predict(bgr, conf=MODEL_CONF, verbose=False)[0]
+    # iou 0.5: 같은 브라켓을 두 번 찾는 일이 있었다 (젯슨 154909, 기본 0.7)
+    r = model.predict(bgr, conf=MODEL_CONF, iou=0.5, verbose=False)[0]
     out = []
     if r.keypoints is None or r.boxes is None:
         return out
