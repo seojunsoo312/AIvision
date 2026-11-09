@@ -7,7 +7,11 @@ import numpy as np
 from vision.depth_cloud import (
     PLANE_HEIGHT_MAX_MM,
     PLANE_HEIGHT_MIN_MM,
+    DEPTH_VIS_FAR_MM,
+    DEPTH_VIS_NEAR_MAX_MM,
     auto_plane_height_mm,
+    colorize_depth,
+    depth_vis_range,
     depth_edge_mask,
     fit_plane_ransac,
     plane_foreground_mask,
@@ -74,5 +78,52 @@ class EdgeMaskTest(unittest.TestCase):
         self.assertFalse(edge[:150].any())  # 멀리 떨어진 책상
 
 
+class DepthVisRangeTest(unittest.TestCase):
+    """화면 깊이 색: 책상보다 높은 브라켓과 로봇팔이 서로 다른 색이어야 한다."""
+
+    def _scene(self):
+        depth = np.full((480, 640), DESK_MM, np.float32)
+        depth[200:280, 100:180] = DESK_MM - 42.0  # 브라켓 윗면
+        depth[150:480, 300:400] = DESK_MM - 180.0  # 로봇팔
+        return depth
+
+    def test_bracket_and_arm_get_different_colors(self):
+        depth = self._scene()
+        low, high = depth_vis_range(depth)
+        self.assertLessEqual(low, DESK_MM - 180.0)  # 팔까지 담음
+        self.assertEqual(high, DESK_MM + DEPTH_VIS_FAR_MM)
+        vis = colorize_depth(depth).astype(int)
+        desk, bracket, arm = vis[100, 50], vis[240, 140], vis[400, 350]
+        self.assertGreater(np.abs(bracket - arm).sum(), 60)
+        self.assertGreater(np.abs(bracket - desk).sum(), 60)
+
+    def test_range_is_capped_and_ignores_specks(self):
+        depth = self._scene()
+        depth[0:3, 0:3] = 100.0  # 몇 점 튀는 노이즈
+        low, _ = depth_vis_range(depth)
+        self.assertGreaterEqual(low, DESK_MM - DEPTH_VIS_NEAR_MAX_MM)
+
+    def test_empty_depth(self):
+        self.assertIsNone(depth_vis_range(np.zeros((480, 640), np.float32)))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class DepthBlobTest(unittest.TestCase):
+    """YOLO 대신 뎁스 덩어리로 물체 찾기: 가장자리에 닿거나 높은 덩어리는 뺀다."""
+
+    def test_keeps_object_drops_border_and_tall(self):
+        from yolo.pose.instances import depth_blob_boxes
+
+        depth = np.full((480, 640), DESK_MM, np.float32)
+        depth[:, 600:] = 0.0  # 컬러 맞춤 뒤 오른쪽은 뎁스가 없다
+        depth[200:240, 300:360] = DESK_MM - 35.0  # 브라켓
+        depth[100:140, 585:600] = DESK_MM - 10.0  # 뎁스 끝에 닿은 책상 프레임
+        depth[300:360, 100:160] = DESK_MM - 150.0  # 높은 것 (팔)
+        plane = np.array([0.0, 0.0, 1.0, -DESK_MM])  # 카메라 z = 책상 깊이
+        boxes = depth_blob_boxes(depth, K, plane, 4.0, None)
+        self.assertEqual(len(boxes), 1)
+        x1, y1, x2, y2 = boxes[0]
+        self.assertTrue(295 <= x1 <= 305 and 195 <= y1 <= 205 and 355 <= x2 <= 365 and 235 <= y2 <= 245)

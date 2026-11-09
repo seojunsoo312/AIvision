@@ -761,8 +761,9 @@ def refine_icp(
     if len(cad) < MIN_POINTS or len(scene) < MIN_POINTS:
         raise ValueError(f"점 부족  cad={len(cad)} scene={len(scene)}")
     cam = np.zeros(3) if camera_origin is None else np.asarray(camera_origin, dtype=np.float64)
-    source, _ = _preprocess(_pcd(scene), voxel_mm, camera_origin=cam)
-    target, _ = _preprocess(_pcd(cad), voxel_mm, camera_origin=None)
+    # FPFH 는 안 쓰고, CAD 법선은 캐시한다 (매번 계산하면 약 1초).
+    source = _scene_icp_source(scene, voxel_mm, cam)
+    target = _cad_icp_target(cad, voxel_mm)
     T0 = np.asarray(T_init, dtype=np.float64).reshape(4, 4)
     T_scene_cad = _partial_icp_to_cad(
         source,
@@ -994,6 +995,271 @@ def register_class_icp(
     }
 
 
+# ---- 책상 위 자세 탐색 (x, y, yaw 만) ----------------------------------------
+# 브라켓은 책상 위에 세 가지 자세로만 놓인다. 자세마다 높이가 정해지므로
+# 남는 건 책상 위 x, y 와 수직축 둘레 회전뿐이다. RANSAC 없이 이 세 값만 찾고,
+# 1등만 촘촘한 점으로 6D ICP 를 한 번 해서 실제 기울기를 맞춘다.
+REST_POSES: dict[int, tuple[tuple[float, float, float], ...]] = {
+    0: ((0.0, 0.0, 0.0),),  # 세우기
+    1: ((90.0, 0.0, 0.0), (-90.0, 0.0, 0.0)),  # 눕히기
+    2: ((180.0, 45.0, 0.0),),  # 비스듬히
+}
+REST_YAW_STEP_DEG = 15.0
+REST_COARSE_VOXEL_MM = 3.0
+REST_FINE_VOXEL_MM = 1.0
+_REST_REFINE = 12  # 첫 ICP 단계 뒤 끝까지 맞출 후보 수
+_REST_KEEP = 3  # 촘촘한 단계로 넘길 후보 수
+# 장면 최고 높이가 자세 높이에서 이만큼 벗어나면 그 자세는 보지 않는다.
+_REST_HEIGHT_BELOW_MM = 12.0
+_REST_HEIGHT_ABOVE_MM = 6.0
+# 책상 위 x, y, yaw ICP: (최대 대응 거리 mm, 반복)
+_REST_ICP_STAGES = ((10.0, 3), (6.0, 6), (3.0, 10))
+
+
+def _nn_index(points: np.ndarray):
+    from open3d.core import Tensor
+    from open3d.core import nns
+
+    index = nns.NearestNeighborSearch(Tensor(np.ascontiguousarray(points, dtype=np.float32)))
+    index.knn_index()
+    return index
+
+
+def _nn_query(index, query: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """가장 가까운 점 번호와 거리(mm)."""
+    from open3d.core import Tensor
+
+    idx, d2 = index.knn_search(Tensor(np.ascontiguousarray(query, dtype=np.float32)), 1)
+    return idx.numpy().reshape(-1), np.sqrt(d2.numpy().reshape(-1).astype(np.float64))
+
+
+def _voxel(xyz: np.ndarray, voxel_mm: float) -> np.ndarray:
+    pts = _as_xyz(xyz)
+    if voxel_mm <= 0:
+        return pts
+    down = np.asarray(_pcd(pts).voxel_down_sample(float(voxel_mm)).points, dtype=np.float64)
+    return down if len(down) >= MIN_POINTS else pts
+
+
+def _rot_z(deg: float) -> np.ndarray:
+    a = np.deg2rad(float(deg))
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+def _seat_z(T: np.ndarray, cad: np.ndarray, plane: np.ndarray, gap_mm: float = 0.5) -> np.ndarray:
+    """회전·x·y 는 두고, 책상 법선 방향으로만 밀어 CAD 최저점을 책상 위 gap 에 둔다."""
+    T = T.copy()
+    n = plane[:3]
+    h = (cad @ T[:3, :3].T + T[:3, 3]) @ n + float(plane[3])
+    T[:3, 3] -= n * (float(np.min(h)) - gap_mm)
+    return T
+
+
+def _fit_xy_yaw(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """src→dst 를 z축 회전 + xy 이동으로 최소제곱 (2D Kabsch)."""
+    a = src[:, :2]
+    b = dst[:, :2]
+    ca, cb = a.mean(axis=0), b.mean(axis=0)
+    H = (a - ca).T @ (b - cb)
+    ang = np.arctan2(H[0, 1] - H[1, 0], H[0, 0] + H[1, 1])
+    c, s = np.cos(ang), np.sin(ang)
+    R2 = np.array([[c, -s], [s, c]])
+    t2 = cb - R2 @ ca
+    R = np.eye(3)
+    R[:2, :2] = R2
+    return R, np.array([t2[0], t2[1], 0.0])
+
+
+_ICP_TARGET_CACHE: dict[tuple, object] = {}
+
+
+def _cad_icp_target(cad: np.ndarray, voxel_mm: float):
+    """CAD 는 매번 같으니 법선(약 1초)은 한 번만 계산한다. FPFH 는 안 쓴다."""
+    o3d = _require_o3d()
+    key = (cad.shape, float(voxel_mm), float(cad.sum()))
+    if key not in _ICP_TARGET_CACHE:
+        cloud = _pcd(_voxel(cad, voxel_mm))
+        radius = max(float(voxel_mm) * 2.0, 4.0)
+        cloud.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=30))
+        cloud.orient_normals_consistent_tangent_plane(k=15)
+        _ICP_TARGET_CACHE[key] = cloud
+    return _ICP_TARGET_CACHE[key]
+
+
+def warm_rest_icp(voxel_mm: float = REST_FINE_VOXEL_MM, cad_path: Path | None = None) -> None:
+    """카메라 창 시작 때 CAD 법선을 미리 계산해 첫 정합을 빠르게 한다."""
+    cad = load_cad_xyz(cad_path, voxel_mm=voxel_mm)
+    _cad_icp_target(cad, voxel_mm)
+
+
+def _scene_icp_source(scene: np.ndarray, voxel_mm: float, cam: np.ndarray):
+    o3d = _require_o3d()
+    cloud = _pcd(_voxel(scene, voxel_mm))
+    radius = max(float(voxel_mm) * 2.0, 4.0)
+    cloud.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=30))
+    cloud.orient_normals_towards_camera_location(np.asarray(cam, dtype=np.float64).reshape(3))
+    return cloud
+
+
+def _rest_icp(
+    T: np.ndarray,
+    cad_index,
+    cad: np.ndarray,
+    cad_seat: np.ndarray,
+    scene: np.ndarray,
+    plane: np.ndarray,
+    stages=_REST_ICP_STAGES,
+) -> tuple[np.ndarray, np.ndarray]:
+    """책상에 앉힌 채로 x, y, yaw 만 맞춘다. 반환: T, 장면점→CAD 거리."""
+    for dist, iters in stages:
+        for _ in range(iters):
+            T_inv = np.linalg.inv(T)
+            local = scene @ T_inv[:3, :3].T + T_inv[:3, 3]
+            idx, d = _nn_query(cad_index, local)
+            keep = d <= dist
+            if int(np.count_nonzero(keep)) < MIN_POINTS:
+                break
+            model = cad[idx[keep]] @ T[:3, :3].T + T[:3, 3]
+            R, t = _fit_xy_yaw(model, scene[keep])
+            D = np.eye(4)
+            D[:3, :3] = R
+            D[:3, 3] = t
+            T = _seat_z(D @ T, cad_seat, plane)
+            if abs(np.arctan2(R[1, 0], R[0, 0])) < 1e-4 and float(np.linalg.norm(t)) < 0.01:
+                break
+    T_inv = np.linalg.inv(T)
+    _, d = _nn_query(cad_index, scene @ T_inv[:3, :3].T + T_inv[:3, 3])
+    return T, d
+
+
+def rest_rpys(class_id: int | None) -> list[tuple[int, tuple[float, float, float]]]:
+    """(클래스, 자세 rpy). 클래스가 없으면 세 자세 전부."""
+    ids = (int(class_id),) if _known_pose_class(class_id) else tuple(REST_POSES)
+    return [(cid, rpy) for cid in ids for rpy in REST_POSES[cid]]
+
+
+def register_rest_icp(
+    cad_xyz: np.ndarray,
+    scene_xyz: np.ndarray,
+    *,
+    desk_plane: np.ndarray | None = None,
+    class_id: int | None = None,
+    camera_origin: np.ndarray | None = None,
+    coarse_voxel_mm: float = REST_COARSE_VOXEL_MM,
+    fine_voxel_mm: float = REST_FINE_VOXEL_MM,
+    fine: bool = True,
+) -> dict:
+    """베이스 mm 장면. 책상 위 x, y, yaw 를 거칠게 찾고(①), 1등만 촘촘히 6D ICP(②).
+
+    면 하나만 크게 보이면(비스듬히를 옆에서 볼 때) 회전이 잘 안 정해진다.
+    그래서 yaw 시작점을 촘촘히(15°) 두고 후보를 넉넉히 끝까지 맞춘다.
+    """
+    up = np.array([0.0, 0.0, 1.0])
+    plane = _orient_desk_plane(
+        np.array([0.0, 0.0, 1.0, 0.0]) if desk_plane is None else desk_plane, up
+    )
+    cad_full = _as_xyz(cad_xyz)
+    scene_full = _clean_registration_scene(scene_xyz)
+    if len(cad_full) < MIN_POINTS or len(scene_full) < MIN_POINTS:
+        raise ValueError(f"점 부족  cad={len(cad_full)} scene={len(scene_full)}")
+    cam = np.zeros(3) if camera_origin is None else np.asarray(camera_origin, dtype=np.float64)
+    scene = _voxel(scene_full, coarse_voxel_mm)
+    cad = _voxel(cad_full, coarse_voxel_mm)
+    cad_index = _nn_index(cad_full)  # 대응점은 촘촘한 CAD 에서 (거친 점끼리면 간격만큼 어긋난다)
+    scene_h = scene_full @ plane[:3] + float(plane[3])
+    top = float(np.percentile(scene_h, 99))
+    center = np.median(scene_full, axis=0)
+
+    from motion.robot_kinematics import rpy_deg_to_rotmat
+
+    rests = []
+    for cid, rpy in rest_rpys(class_id):
+        Rs = rpy_deg_to_rotmat(*rpy)
+        z = (cad_full @ Rs.T)[:, 2]
+        rests.append((cid, rpy, Rs, float(z.max() - z.min())))
+    near = [
+        r for r in rests
+        if r[3] - _REST_HEIGHT_BELOW_MM <= top <= r[3] + _REST_HEIGHT_ABOVE_MM
+    ]
+    rests = near or rests
+
+    def score(T: np.ndarray, d: np.ndarray) -> float:
+        iou = _xy_iou(scene, apply_T(cad, T), cell_mm=3.0)
+        return float(np.mean(d <= 2.5)) + iou - float(np.median(d)) / 10.0
+
+    # 모든 자세·yaw 는 첫 단계만, 상위 몇 개만 끝까지 맞춘다.
+    first, rest_stages = _REST_ICP_STAGES[:1], _REST_ICP_STAGES[1:]
+    cands = []
+    for cid, rpy, Rs, _height in rests:
+        for yaw in _yaw_samples(REST_YAW_STEP_DEG):
+            T = np.eye(4)
+            T[:3, :3] = _rot_z(yaw) @ Rs
+            body = cad @ T[:3, :3].T
+            T[:3, 3] = center - np.median(body, axis=0)
+            T = _seat_z(T, cad, plane)
+            T, d = _rest_icp(T, cad_index, cad_full, cad, scene, plane, first)
+            cands.append((score(T, d), T, cid, rpy, yaw))
+    cands.sort(key=lambda c: c[0], reverse=True)
+    refined = []
+    for _s, T, cid, rpy, yaw in cands[:_REST_REFINE]:
+        T, d = _rest_icp(T, cad_index, cad_full, cad, scene, plane, rest_stages)
+        refined.append((score(T, d), T, cid, rpy, yaw))
+    cands = sorted(refined, key=lambda c: c[0], reverse=True)
+
+    # 같은 답(대칭·수렴)이 겹치면 하나만 남긴다.
+    keep: list = []
+    for c in cands:
+        if all(
+            np.linalg.norm(c[1][:3, 3] - k[1][:3, 3]) > 3.0
+            or np.degrees(np.arccos(np.clip((np.trace(c[1][:3, :3].T @ k[1][:3, :3]) - 1) / 2, -1, 1))) > 10.0
+            for k in keep
+        ):
+            keep.append(c)
+        if len(keep) >= _REST_KEEP:
+            break
+
+    source = target = None
+    if fine:
+        source = _scene_icp_source(scene_full, fine_voxel_mm, cam)
+        target = _cad_icp_target(cad_full, fine_voxel_mm)
+    best = None
+    for _score, T0, cid, rpy, yaw in keep:
+        T = T0
+        if fine:
+            T_sc = _partial_icp_to_cad(source, target, np.linalg.inv(T0), quick=True)
+            T = rest_if_close(np.linalg.inv(T_sc), cad_xyz=cad_full, up=up, desk_plane=plane)
+        cov = pose_coverage(cad_full, scene_full, T, thresh_mm=3.0, camera_origin=cam, detail=True)
+        key = _score_key(cov)
+        if best is None or key > best[0]:
+            best = (key, T, cov, cid, rpy, yaw)
+    assert best is not None
+    _key, T, cov, cid, rpy, yaw = best
+    return {
+        "T": T,
+        "T_init": keep[0][1],
+        "fitness": cov["frac"],
+        "inlier_rmse": cov["median"],
+        "fitness_ransac": 0.0,
+        "inlier_rmse_ransac": 0.0,
+        "icp_method": "rest_icp" + ("_fine" if fine else ""),
+        "scene_frac": cov["frac"],
+        "scene_med": cov["median"],
+        "scene_p90": cov["p90"],
+        "vis_frac": cov["vis_frac"],
+        "xy_iou": cov["xy_iou"],
+        "center_delta": cov["center_delta"],
+        "aligned_ok": cov["aligned_ok"],
+        "n_cad": int(len(cad_full)),
+        "n_scene": int(len(scene_full)),
+        "voxel_mm": float(fine_voxel_mm if fine else coarse_voxel_mm),
+        "source": "rest_icp",
+        "class_id": int(cid),
+        "init_rpy": (rpy[0], rpy[1], _wrap_deg(yaw)),
+        "soft_gravity": True,
+    }
+
+
 def _apply_gravity(
     T: np.ndarray,
     *,
@@ -1024,8 +1290,13 @@ def register_pose(
     camera_origin: np.ndarray | None = None,
     desk_plane: np.ndarray | None = None,
     class_id: int | None = None,
+    method: str = "class",
 ) -> dict:
     """한 인스턴스 점군 → T, xyzrpy.
+
+    method="rest": 책상 위 세 자세로 x, y, yaw 만 찾는 정합(register_rest_icp). 베이스 mm 장면 전용.
+    class_id 는 쓰지 않고, 안 맞으면(miss) 아래 예전 방식(class_id 사용)으로 넘어간다.
+    "rest_coarse" 는 마지막 촘촘한 ICP 를 뺀 것(비교용).
 
     class_id 가 0/1/2 이면 그 자세 후보로 ICP. 전부 실패하면 FPFH 한 번.
     T_init 이 있으면 RANSAC 없이 ICP만. T_prev 가 있으면 180°를 고정한다.
@@ -1033,7 +1304,26 @@ def register_pose(
     cad_xyz = load_cad_xyz(cad_path, voxel_mm=voxel_mm)
     cam = camera_origin
     up = np.array([0.0, 0.0, 1.0]) if flip and T_base_cam is None else None
-    if T_init is not None:
+    raw = None
+    if method in ("rest", "rest_coarse") and T_init is None and up is not None:
+        raw = register_rest_icp(
+            cad_xyz,
+            scene_xyz,
+            desk_plane=desk_plane,
+            class_id=None,  # YOLO 자세가 틀려도 되게 세 자세를 다 본다 (+0.2초)
+            camera_origin=cam,
+            fine=method == "rest",
+        )
+        if not raw.get("aligned_ok", False):
+            # 책상 위 세 자세가 아니면(기대거나 쌓임) 예전 방식으로 한 번 더.
+            print(
+                f"책상 위 자세 miss (on={raw['scene_frac']:.2f} vis={raw['vis_frac']:.2f}). "
+                "예전 방식으로 다시."
+            )
+            raw = None
+    if raw is not None:
+        pass
+    elif T_init is not None:
         raw = refine_icp(
             cad_xyz,
             scene_xyz,
