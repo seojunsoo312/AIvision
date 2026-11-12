@@ -26,7 +26,7 @@ from motion.hw_controller import (
     grip_user_to_100,
 )
 from motion.arm import Arm, ArmError
-from motion.pick_targets import PickTargets, load_pick_targets
+from motion.pick_targets import PickTargets, SeenObject, load_all_pick_targets, load_pick_targets
 from motion.pose_server import POSE_URL, PoseServer, fetch_pose
 from motion.robot_kinematics import (
     DEFAULT_URDF,
@@ -63,6 +63,8 @@ __all__ = [
     "ArmError",
     "PickTargets",
     "load_pick_targets",
+    "SeenObject",
+    "load_all_pick_targets",
     "Controller",
     "fetch_pose",
     "grip_100_to_user",

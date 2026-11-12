@@ -19,7 +19,10 @@ bash ~/AIvision/deploy/calibrate_arms.sh        # 팔로워 → 리더 캘리브
 ~/miniforge3/envs/AIvision/bin/python ~/AIvision/deploy/check_board.py   # 언제든 다시 점검
 ```
 
-- `yolo/weights/best.pt`는 git에 없으므로 USB로 복사합니다. 없으면 점검에서 「경고」로 나옵니다.
+- 박스 모델 `yolo/weights/box_best.pt` 는 git에 없습니다. 학생이 5차시에 학습하면 생기므로, 수업 보드에는 없는 것이 정상입니다 (점검에서도 「없음 — 5차시 학습 전이면 정상」). 강사 시연 보드에는 USB로 복사합니다. 예전 이름 `best.pt` 만 있는 보드도 그대로 켜집니다.
+- 키포인트 방식 (`roi_cloud.py --pose kpt`, 창의 `k`) 을 쓰려면 키포인트 가중치 `yolo/weights/kpt_base.pt` 도 같은 경로로 복사합니다. 키포인트 학습 (`kpt_train.py`) 의 출발점이자 라벨 도구 자동 찍기 (`m`) 의 모델입니다. 카메라 창의 키포인트 방식은 학생이 학습한 `yolo/weights/kpt_best.pt` 로만 켜집니다.
+- 박스 기본 모델 `yolo/weights/box_base.pt` 와 박스 섞음 세트 `yolo/datasets/box_base/` (약 25 MB, 노트북에서 `python yolo/train/box_base.py` 로 만듦) 를 같은 경로로 복사합니다. 학생이 사진 20장으로 학습할 수 있는 것은 이 둘 덕분입니다. 기본 모델이 없으면 `train.py` 가 처음부터 학습해 사진이 수백 장 필요하고, 섞음 세트가 없으면 가볍게만 학습합니다.
+- 수업에서 키포인트 학습 (`yolo/train/kpt_train.py`) 을 하려면 기본 섞음 세트 `yolo/datasets/kpt_base/` (약 23 MB, 노트북에서 `kpt_train.py --make-base` 로 만듦) 도 같은 경로로 복사합니다.
 - 이미 `~/miniconda3`가 있는 보드는 그 conda를 씁니다. 없으면 `~/miniforge3`를 설치합니다(위 마지막 줄의 경로도 그쪽).
 - 로그는 홈에 `aivision_setup_날짜.log`로 남습니다.
 - 바탕화면에 아이콘 두 개가 생깁니다. **「AIvision 터미널」**은 terminator 를 4칸(pendant · vision · yolo · AIvision)으로 열고 칸마다 `AIvision` 환경을 켜 둡니다. **「AIvision 업데이트」**는 9번에서 씁니다. terminator 는 미리 `sudo apt install -y terminator` 로 깔아 둡니다. 아이콘만 다시 만들려면 `bash ~/AIvision/deploy/install_terminal_icon.sh`.
@@ -33,7 +36,7 @@ bash ~/AIvision/deploy/calibrate_arms.sh        # 팔로워 → 리더 캘리브
 - 수업에서는 터미널 두 개를 씁니다. 하나는 카메라 창, 하나는 펜던트나 노트북입니다. 둘 다 같은 `AIvision` 환경입니다.
 
 ```bash
-# 터미널 1 (카메라)
+# 터미널 1 (카메라). 자세 방식: CAD 정합 (기본), 키포인트는 --pose kpt 또는 창에서 k
 conda activate AIvision && cd ~/AIvision && python yolo/pose/roi_cloud.py
 # 터미널 2 (팔)
 conda activate AIvision && cd ~/AIvision && python pendant/main.py --grasp
@@ -44,7 +47,13 @@ conda activate AIvision && cd ~/AIvision && python pendant/main.py --grasp
 - JetPack 6을 올린 Jetson (Ubuntu 22.04). 버전 확인: `cat /etc/nv_tegra_release` → `R36`
 - 인터넷 연결 (설치하는 동안만)
 - **ARM64용** Orbbec SDK v1.10 패키지. 노트북의 `..._linux_x64_release`는 Jetson에서 안 됩니다. [OrbbecSDK releases](https://github.com/orbbec/OrbbecSDK/releases)에서 `arm64`(또는 `aarch64`) 판을 받습니다.
-- 노트북의 `yolo/weights/best.pt` (학습한 가중치. git에 없음. USB로 복사). 이것 하나만 옮깁니다.
+- 노트북의 가중치 (git에 없음, USB로 `yolo/weights/` 에 복사). 이름은 네 가지로 정해져 있습니다.
+  | 파일 | 무엇 | 수업 보드 |
+  |---|---|---|
+  | `box_base.pt` | 박스 기본 모델 (5차시 학습의 출발점) | **복사** |
+  | `kpt_base.pt` | 키포인트 기본 모델 (6차시 학습의 출발점, 노트북의 v4n_ft2) | **복사** |
+  | `box_best.pt` | 학습한 박스 모델 (학생이 5차시에 만듦) | 복사 안 함 (강사 시연 보드만) |
+  | `kpt_best.pt` | 학습한 키포인트 모델 (학생이 6차시에 만듦) | 복사 안 함 |
   - 시작 가중치 `yolo11n.pt`는 옮기지 않습니다. 처음 학습할 때 ultralytics가 인터넷에서 받습니다.
   - 카메라 USB 권한 파일 `99-obsensor-libusb.rules`도 옮기지 않습니다. SDK 압축 안 `script/`에 들어 있습니다.
 
@@ -83,7 +92,7 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 cd ~
 git clone https://github.com/seojunsoo312/AIvision.git AIvision
 # ARM64 SDK 압축을 홈에 풀기 → ~/OrbbecSDK_v1.10.xx_... 또는 ~/OrbbecViewer_v1.10.xx_...
-mkdir -p ~/AIvision/yolo/weights && cp /media/$USER/<USB>/best.pt ~/AIvision/yolo/weights/
+mkdir -p ~/AIvision/yolo/weights && cp /media/$USER/<USB>/{box_base,kpt_base}.pt ~/AIvision/yolo/weights/
 
 # 카메라 USB 권한: SDK 의 설치 스크립트가 규칙 복사와 다시 불러오기를 한다.
 find ~/Orbbec* -name install_udev_rules.sh
@@ -210,7 +219,7 @@ ls -l /dev/so101_*
 | 손눈 촬영 | 펜던트 Connect 후 `python vision/handeye/capture.py` |
 | 손눈 계산 | `python vision/handeye/compute.py` |
 | 사진·라벨·학습 | `python yolo/train/capture.py` → `label.py` → `prepare.py` → `train.py` |
-| 카메라 창 | `python yolo/pose/roi_cloud.py` |
+| 카메라 창 | `python yolo/pose/roi_cloud.py` (CAD 정합), `--pose kpt` (키포인트). 창에서 `k` 바꾸기, `i` 검사 |
 | 물체 위치 불러오기 | 펜던트 `--grasp`의 버튼, 또는 노트북 `load_pick_targets(arm)` |
 
 이때 같이 봅니다.
@@ -241,7 +250,7 @@ ls -l /dev/so101_*
 **마스터에서 (복제 전)**
 
 1. JetPack 플래시(NVMe) → `bash deploy/setup_jetson.sh`. 스크립트가 마지막에 pip·conda 캐시를 지워 복제할 용량을 줄입니다.
-2. `yolo/weights/best.pt`를 USB로 복사하고, 카메라를 꽂아 `check_board.py`의 카메라 + YOLO 항목까지 확인합니다.
+2. `yolo/weights/box_best.pt`를 USB로 복사하고, 카메라를 꽂아 `check_board.py`의 카메라 + YOLO 항목까지 확인합니다.
 3. **팔 시리얼 규칙과 캘리브는 하지 않습니다.** 팔마다 다르므로 복제 뒤 보드마다 합니다. 그래서 복제 전에 지울 것이 없습니다.
 4. `sudo shutdown now`로 완전히 끈 뒤 SSD를 뺍니다. 켜진 채로 빼거나 강제로 끄면 깨진 파일 시스템이 그대로 복사됩니다.
 
@@ -260,7 +269,7 @@ bash ~/AIvision/deploy/calibrate_arms.sh        # 팔로워 → 리더 캘리브
 sudo hostnamectl set-hostname jetson-03         # 선택: 보드 구분용 이름
 ```
 
-- 카메라 캘리브와 YOLO 학습은 수업에서 학생이 합니다. 기수 사이에는 `python reset_class.py --all`. 이때 `yolo/weights/best.pt`도 지워지므로, 학생이 학습하기 전에는 카메라 창이 켜지지 않습니다.
+- 카메라 캘리브와 YOLO 학습은 수업에서 학생이 합니다. 기수 사이에는 `python reset_class.py --all`. 이때 `yolo/weights/box_best.pt`도 지워지므로, 학생이 학습하기 전에는 물체 인식 창(`roi_cloud.py`)이 켜지지 않습니다. 손눈 캘리브(`capture.py`)와 카메라 확인(`vision_test.py`)은 그대로 켜집니다.
 - machine-id, SSH 호스트 키는 8대가 같아지지만 수업 사용에는 문제가 없습니다. Ubuntu 22.04 NetworkManager의 IPv4 DHCP는 MAC 주소로 기기를 구분하므로 IP가 겹치지 않습니다. 보드에 SSH로 들어갈 일이 생기면 그때 `sudo rm /etc/ssh/ssh_host_* && sudo dpkg-reconfigure openssh-server`로 키를 새로 만듭니다.
 
 ## 9. 업데이트
@@ -278,7 +287,7 @@ sudo hostnamectl set-hostname jetson-03         # 선택: 보드 구분용 이�
 학생에게는 이것만 알려 줍니다: "업데이트하면 실습 노트북이 처음 상태로 돌아갑니다. 내가 고친 것은 바탕화면 `AIvision_백업` 폴더에 날짜별로 남아 있습니다."
 
 - 바탕화면 「실행 코드.md」 · 「노트북 실습.md」는 `docs/` 의 같은 이름 파일에서 복사합니다. 학생 안내를 고치려면 `docs/` 쪽 파일을 고쳐 커밋 · 푸쉬하면 업데이트 때 바탕화면에 반영됩니다(바탕화면 파일을 고쳐 두었으면 백업 폴더에 보관).
-- git 에 없는 것은 아이콘이 바꾸지 않습니다. `yolo/weights/best.pt` 는 USB 로 복사합니다.
+- git 에 없는 것은 아이콘이 바꾸지 않습니다. `yolo/weights/box_best.pt` 는 USB 로 복사합니다.
 - 카메라 캘리브(`vision/calib_data/`), 필터 값(`vision/orbbec_filters.json`), 팔 캘리브는 보드마다 다르므로 git 에 없고 업데이트해도 그대로입니다.
 - 강의자 보드(개발용)에서는 아이콘을 쓰지 않습니다. 커밋하지 않은 작업이 백업 폴더로 옮겨지고 저장소가 GitHub 상태로 돌아가기 때문입니다.
 - 강의자 보드에서 코드를 고쳤으면 커밋 전에 자동 테스트를 돌립니다. 팔·카메라 없이 20초쯤 걸리고, 모두 `OK` 여야 합니다. 좌표 변환 · 집기 좌표 · 픽앤플레이스 순서 · 사물 패널 계산과, 폴더끼리 부르는 방향(`cad → motion → vision → yolo → pendant`, 아래층이 위층을 부르면 실패)을 봅니다.

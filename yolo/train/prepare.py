@@ -68,7 +68,10 @@ def main() -> None:
     if missing:
         print(f"라벨 없는 이미지 {missing}장 — 건너뜀. python yolo/train/label.py 로 마저 표시.")
     if len(pairs) < 10:
-        raise SystemExit(f"라벨 쌍이 {len(pairs)}개뿐입니다. 클래스당 80장 이상을 권장합니다.")
+        raise SystemExit(
+            f"라벨 쌍이 {len(pairs)}개뿐입니다. 10장 이상 라벨하세요 "
+            "(박스 기본 모델이 있으면 세 자세가 골고루 든 20장이면 충분, 없으면 자세마다 80장 이상)."
+        )
     rng = random.Random(SPLIT_SEED)
     rng.shuffle(pairs)
     n_val = max(1, int(round(len(pairs) * VAL_RATIO)))

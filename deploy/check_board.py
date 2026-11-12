@@ -223,10 +223,28 @@ def _():
 print("== 보드마다 따로 하는 것")
 
 
-@check("YOLO 가중치 yolo/weights/best.pt")
+@check("박스 모델 yolo/weights/box_best.pt")
 def _():
-    p = PROJECT / "yolo/weights/best.pt"
-    return (PASS, f"{p.stat().st_size // 1024} KB") if p.exists() else (WARN, "없음 — USB 로 복사")
+    p = PROJECT / "yolo/weights/box_best.pt"
+    old = PROJECT / "yolo/weights/best.pt"  # 이름 바꾸기 전 학습한 보드
+    if p.exists():
+        return PASS, f"{p.stat().st_size // 1024} KB"
+    if old.exists():
+        return PASS, f"예전 이름 best.pt ({old.stat().st_size // 1024} KB)"
+    return PASS, "없음 — 5차시 학습 전이면 정상 (초기화됨)"
+
+
+@check("기본 모델 yolo/weights/box_base.pt · kpt_base.pt")
+def _():
+    w = PROJECT / "yolo/weights"
+    # 예전 자리 · 이름도 받아 준다 (bracket_base.pt, pose_runs 의 v4n_ft2)
+    box = any((w / n).exists() for n in ("box_base.pt", "bracket_base.pt"))
+    kpt = (w / "kpt_base.pt").exists() or any(
+        (PROJECT / f"vision/sim/out/pose_runs/{n}/weights/best.pt").exists() for n in ("v4n_ft2", "v4n_ft", "v4n"))
+    miss = [n for n, ok in (("box_base.pt", box), ("kpt_base.pt", kpt)) if not ok]
+    if not miss:
+        return PASS, "둘 다 있음"
+    return WARN, f"없음 {miss} — 노트북에서 yolo/weights/ 로 USB 복사 (5 · 6차시 학습의 출발점)"
 
 
 @check("팔 시리얼 이름 (/dev/so101_*)")
@@ -254,9 +272,11 @@ def _():
 
 @check("카메라 + YOLO (GPU)")
 def _():
-    weights = PROJECT / "yolo/weights/best.pt"
+    weights = PROJECT / "yolo/weights/box_best.pt"
+    if not weights.exists():
+        weights = PROJECT / "yolo/weights/best.pt"  # 예전 이름
     if not weights.exists() or len([l for l in sh("lsusb").splitlines() if "2bc5" in l]) < 2:
-        return WARN, "카메라 또는 best.pt 없음: 생략"
+        return WARN, "카메라 또는 박스 모델 (box_best.pt) 없음: 생략"
     if sh("pgrep -f 'roi_cloud.py|yolo/train/capture.py|OrbbecViewer'"):
         return WARN, "카메라를 쓰는 다른 프로그램이 켜져 있어 생략"
     sys.path.insert(0, str(PROJECT / "pendant"))

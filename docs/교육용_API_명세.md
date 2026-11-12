@@ -1,11 +1,11 @@
 # 교육용 팔 API 명세서
 
-학생이 역기구학·시리얼·펜던트 GUI를 다루지 않고, TCP를 mm와 deg로 움직이는 계약이다. 구현은 `motion.Arm`과 `load_pick_targets`이다.
+학생이 역기구학·시리얼·펜던트 GUI를 다루지 않고, TCP를 mm와 deg로 움직이는 계약이다. 구현은 `motion.Arm`과 `load_pick_targets` · `load_all_pick_targets`이다.
 
 ## 1. 범위
 
 - 대상: SO-101 기반 6자유도 팔 + 그리퍼 1축.
-- 학생 코드는 `Arm`과 `load_pick_targets`만 호출한다. IK와 모터 버스는 이 API 밖에 둔다.
+- 학생 코드는 `Arm`과 `load_pick_targets` · `load_all_pick_targets`만 호출한다. IK와 모터 버스는 이 API 밖에 둔다.
 - 두 가지 모드가 있다.
   - `virtual` (기본): 로봇 없이 Meshcat만 움직인다.
   - `real`: 실기 시리얼에 연결한다. 연결에 실패하면 시작 시점에 예외가 난다.
@@ -136,7 +136,7 @@ pick = load_pick_targets()
 pick = load_pick_targets(arm)
 ```
 
-펜던트 **물체 위치 불러오기**와 같이, 카메라 창(`roi_cloud`)에 물체 등록을 요청한다. 그 6D가 올 때까지 이 줄에서 기다린 뒤 픽앤플레이스 좌표를 만든다. 저장된 자세 파일을 읽지 않는다. 카메라 창이 켜져 있어야 한다. 초록 버튼과 동시에 호출하면 등록 요청이 겹친다.
+펜던트 **물체 위치 불러오기**와 같이, 카메라 창(`roi_cloud`)에 물체 등록을 요청한다. 카메라 창에서 지금 고른 자세 방식 (CAD 정합 또는 키포인트) 의 6D가 온다. 그 6D가 올 때까지 이 줄에서 기다린 뒤 픽앤플레이스 좌표를 만든다. 저장된 자세 파일을 읽지 않는다. 카메라 창이 켜져 있어야 한다. 초록 버튼과 동시에 호출하면 등록 요청이 겹친다.
 
 반환 필드는 아래와 같다. 각 값은 소수 둘째 자리이다.
 
@@ -149,6 +149,35 @@ pick = load_pick_targets(arm)
 집기 높이 `z_g`는 `pick.g_xyz[2]`이다. 내려놓을 X, Y는 이 함수에 없다. 실습 코드에서 상수로 둔다. 기본 예는 `(150, -100)`이다.
 
 `arm`을 넘기면 그 팔의 현재 관절로 손목 자세를 고른다. 넘기지 않으면 홈 관절을 쓴다. 카메라 창이 응답하지 않거나, 물체 박스가 없거나, 등록에 실패하면 `ArmError`이다.
+
+### 4.7 `load_all_pick_targets`
+
+```python
+objs = load_all_pick_targets()
+objs = load_all_pick_targets(arm)
+```
+
+카메라 창에 보이는 브라켓을 **모두** 요청한다. 브라켓마다 위치 · 자세 · 색 · 판정과 집기 좌표가 온다. 판정은 카메라 창의 `i` 검사와 같다 (테두리 맞춤 → 흰/검 → 흰 브라켓 마커 양/불). 브라켓이 아닌 것으로 판정된 것은 빠진다. **로봇에서 가까운 순서**로 돌려준다.
+
+목록의 원소 (`SeenObject`):
+
+| 필드 | 의미 |
+|---|---|
+| `xyz`, `rpy` | 물체 위치 (mm), 방향 (deg). 로봇 베이스 기준 |
+| `pose` | 놓인 자세: `"세우기"` · `"눕히기"` · `"비스듬히"` |
+| `color` | `"흰"` · `"검"` |
+| `verdict` | `"양품"` · `"불량"` · `"검사 안 함"` (검은 브라켓은 검사하지 않는다) |
+| `pick` | 집기 좌표 (`load_pick_targets`와 같은 `PickTargets`). 계산하지 못하면 `None` |
+| `distance` | 로봇 베이스 중심에서 물체까지 바닥 거리 (mm) |
+
+집는 순서는 학생이 정한다. 예: 불량 먼저, 그다음 가까운 것부터.
+
+```python
+objs = load_all_pick_targets(arm)
+order = sorted(objs, key=lambda o: (o.verdict != "불량", o.distance))
+```
+
+카메라 창이 응답하지 않거나, 브라켓이 하나도 없으면 `ArmError`이다. 오류 문구는 `load_pick_targets`와 같다.
 
 ## 5. 오류
 
@@ -168,7 +197,7 @@ pick = load_pick_targets(arm)
 - `moveJ`의 `speed`가 8–45 deg/s가 아님
 - 이미 `close()`된 팔
 - 목표에 도달하지 못함 (IK 실패, 충돌, 이동 시간 초과)
-- `load_pick_targets()`인데 카메라 창이 응답하지 않음, 바운딩 박스가 없음, 등록 실패, 또는 이미 등록 중
+- `load_pick_targets()` · `load_all_pick_targets()`인데 카메라 창이 응답하지 않음, 바운딩 박스가 없음 (브라켓이 하나도 없음), 등록 실패, 또는 이미 등록 중
 
 ## 6. 예
 

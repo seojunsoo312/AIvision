@@ -165,9 +165,10 @@ def draw_marker(bgr: np.ndarray, region: np.ndarray, width: float, length: float
 
 
 def _default_weights() -> Path:
-    from yolo.train.kpt_label import pick_weights
+    # 시험은 기본 모델로 (학생이 학습한 모델과 섞이지 않게)
+    from yolo.train.kpt_label import base_weights
 
-    return pick_weights()
+    return base_weights()
 
 
 POSE_WEIGHTS = _default_weights()
@@ -182,30 +183,38 @@ def inspect(bgr: np.ndarray, model, cam) -> list[dict]:
     """
     from yolo.train import kpt_label as KL
 
-    H, W = bgr.shape[:2]
     g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    out = []
-    for inst in KL.model_guess(model, bgr, cam):
-        if inst.T_cam_obj is None:
-            continue
-        res = KL.fit_edges(bgr, cam.T_base_cam @ inst.T_cam_obj, cam)
-        T = res[0] if res is not None else cam.T_base_cam @ inst.T_cam_obj
-        edge_px = float(res[1]) if res is not None else float("inf")
-        KL.set_pose(inst, T, cam, KL.SRC_SAVED)
-        KL.fit(inst, cam, W, H)
-        reg, hole, sil = bracket_region(T, cam, (H, W), parts=True)
-        white = bool(reg.sum() > 50 and np.median(g[reg > 0]) > WHITE_MEDIAN)
-        marks = marker_pixels(bgr, reg, hole, sil)
-        n = int(marks.sum())
-        if edge_px > EDGE_FAKE_PX:
-            verdict = "브라켓 아님"
-        elif not white:
-            verdict = "검사 안 함"
-        else:
-            verdict = "불량" if n >= MIN_DARK_PX else "양품"
-        out.append({"box": inst.box, "pose": KL.CLASS_KO[inst.cls], "white": white, "dark_px": n,
-                    "edge_px": edge_px, "verdict": verdict, "region": reg, "marks": marks, "T_base": T})
-    return out
+    return [judge(bgr, cam.T_base_cam @ inst.T_cam_obj, cam, gray=g)
+            for inst in KL.model_guess(model, bgr, cam) if inst.T_cam_obj is not None]
+
+
+def judge(bgr: np.ndarray, T_base: np.ndarray, cam, gray: np.ndarray | None = None) -> dict:
+    """자세 하나 (어느 방식으로 구했든, 베이스 mm 4×4) → 테두리 자동 맞춤 → 흰/검 → 양/불.
+
+    키포인트 · CAD 정합 둘 다 이 함수로 판정한다. 돌려주는 것은 inspect 의 한 줄과 같다.
+    """
+    from yolo.train import kpt_label as KL
+
+    H, W = bgr.shape[:2]
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if gray is None else gray
+    res = KL.fit_edges(bgr, np.asarray(T_base, float), cam)
+    T = res[0] if res is not None else np.asarray(T_base, float)
+    edge_px = float(res[1]) if res is not None else float("inf")
+    inst = KL.Instance()
+    KL.set_pose(inst, T, cam, KL.SRC_SAVED)
+    KL.fit(inst, cam, W, H)
+    reg, hole, sil = bracket_region(T, cam, (H, W), parts=True)
+    white = bool(reg.sum() > 50 and np.median(g[reg > 0]) > WHITE_MEDIAN)
+    marks = marker_pixels(bgr, reg, hole, sil)
+    n = int(marks.sum())
+    if edge_px > EDGE_FAKE_PX:
+        verdict = "브라켓 아님"
+    elif not white:
+        verdict = "검사 안 함"
+    else:
+        verdict = "불량" if n >= MIN_DARK_PX else "양품"
+    return {"box": inst.box, "pose": KL.CLASS_KO[inst.cls], "white": white, "dark_px": n,
+            "edge_px": edge_px, "verdict": verdict, "region": reg, "marks": marks, "T_base": T, "inst": inst}
 
 
 def run_real(folder: Path, weights: Path = POSE_WEIGHTS) -> None:

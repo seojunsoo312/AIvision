@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """브라켓 키포인트 10개를 찍어 YOLO-pose 라벨을 만든다 (실사진 미세조정용).
 
+  python yolo/train/kpt_label.py                 # 수업: 5차시에 찍은 사진 (datasets/raw/images) → datasets/raw/kpt_labels
   python yolo/train/kpt_label.py --images yolo/datasets/seat/images --split train
   python yolo/train/kpt_label.py --images 폴더 --weights 모델.pt
 
 찍는 법
-  - 모델(기본 v4n)이 먼저 점을 찍어 둔다. 틀린 점만 끌어서 옮긴다.
-  - 빈 곳 클릭 = 지금 번호 점을 그 자리에. 다음 안 찍은 번호로 넘어간다.
+  - 처음에는 직접 찍는다: 빈 곳 클릭 = 지금 번호 점을 그 자리에. 다음 안 찍은 번호로 넘어간다.
+  - 몇 장 (2~3장) 해 본 뒤 m 을 누르면 자동 찍기가 켜진다. 그때부터 사진을 열면 모델 (기본 kpt_base.pt) 이 점을 찍고
+    테두리 자동 맞춤까지 해 둔다. 윤곽이 실물과 맞으면 n, 틀린 점만 끌어서 옮긴다. 다시 m 이면 끈다.
   - 점 근처 클릭 + 끌기 = 그 점 옮기기 (다른 브라켓 점이면 그 브라켓이 선택된다).
   - 안 보이는 점은 h (자리는 자세에서 자동).
   - 자동 점 (mixed 는 8 · 9 = 안쪽 접힌 곳) 은 사람이 찍지 않는다. 눈으로 찾을 표시가 없어서 자세에서 CAD 로 채운다.
@@ -17,7 +19,8 @@
 번호는 대칭 신경 쓰지 말고 아무 쪽으로 찍어도 된다. 브라켓은 대각선 축 180° 대칭이라 번호를 매기는 법이 두 가지인데,
 저장할 때 자세로 시뮬 라벨과 같은 규칙(canonical_T)에 맞게 번호를 자동으로 다시 매긴다.
 
-키: 0~9 번호 고르기 · h 가려짐 · x 지우기 · g 책상 붙이기 켜기/끄기 · b 화면 밝게 (끔 → 밝게 → 어두운 곳 늘리기, 보기만)
+키: m 자동 찍기 켜기/끄기 (처음엔 꺼짐. --auto 면 켜고 시작)
+    0~9 번호 고르기 · h 가려짐 · x 지우기 · g 책상 붙이기 켜기/끄기 · b 화면 밝게 (끔 → 밝게 → 어두운 곳 늘리기, 보기만)
     f 테두리 자동 맞춤 (지금 자세에서 출발해 CAD 윤곽선이 사진 테두리선에 붙도록 위치 · 각도를 다듬음. 자세 종류는 안 바꿈)
     k 자세 바꾸기 (같은 자리에서 다른 자세 종류를 놓아 보고 테두리와 가장 잘 맞는 것으로. 세우기 ↔ 눕히기 ↔ 비스듬히)
     a 브라켓 추가 · Tab 다음 브라켓 · D 브라켓 삭제
@@ -39,7 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from yolo.config import ROOT, quiet_gtk
+from yolo.config import KPT_BASE_PT, KPT_BEST_PT, ROOT, quiet_gtk
 
 quiet_gtk()
 
@@ -50,20 +53,36 @@ from vision.sim.keypoints import KEYPOINTS_CAD_MM, KPT_SET, N_KPT, canonical_T  
 from vision.text import put_text  # noqa: E402
 
 KPT_DIR = ROOT / "datasets" / "kpt"
+RAW_IMAGES = ROOT / "datasets" / "raw" / "images"  # 수업 사진 (5차시, 박스 라벨과 같은 사진)
+RAW_KPT_LABELS = ROOT / "datasets" / "raw" / "kpt_labels"
 POSE_RUNS = ROOT.parent / "vision" / "sim" / "out" / "pose_runs"
-# 자세 모델 가중치: 있는 것 중 앞의 것을 쓴다 (git 에 없어 보드마다 복사해 둔다).
+# 예전 자리의 자세 모델 가중치 (kpt_base.pt 가 없을 때만): 있는 것 중 앞의 것. kpt_base.pt = v4n_ft2 를 복사한 것.
 #   v4n_ft2 = 학생 자리 30장 + 젯슨 2차 42장으로 미세조정 (2026-11-02, 지금 기본)
 #   v4n_ft  = 학생 자리 30장으로 미세조정,  v4n = 시뮬만
 WEIGHT_ORDER = ("v4n_ft2", "v4n_ft", "v4n")
+# 수업에서 학생이 학습한 키포인트 모델 (yolo/train/kpt_train.py 가 만든다, reset_class.py 가 지운다)
+STUDENT_WEIGHTS = KPT_BEST_PT
 
 
 def pick_weights() -> Path:
-    """있는 가중치 중 가장 나은 것. 하나도 없으면 첫 번째 (없는) 경로를 돌려준다 (부르는 쪽이 안내)."""
+    """쓸 키포인트 모델. 학생이 학습한 것이 있으면 그것, 없으면 기본 모델 (base_weights)."""
+    if STUDENT_WEIGHTS.is_file():
+        return STUDENT_WEIGHTS
+    return base_weights()
+
+
+def base_weights() -> Path:
+    """키포인트 기본 모델. yolo/weights/kpt_base.pt, 없으면 예전 자리 (pose_runs 의 v4n_ft2 → v4n_ft → v4n).
+
+    하나도 없으면 kpt_base.pt (없는) 경로를 돌려준다 (부르는 쪽이 안내).
+    """
+    if KPT_BASE_PT.is_file():
+        return KPT_BASE_PT
     for name in WEIGHT_ORDER:
         path = POSE_RUNS / name / "weights" / "best.pt"
         if path.is_file():
             return path
-    return POSE_RUNS / WEIGHT_ORDER[0] / "weights" / "best.pt"
+    return KPT_BASE_PT
 
 
 DEFAULT_WEIGHTS = pick_weights()
@@ -725,6 +744,30 @@ def model_guess(model, bgr: np.ndarray, cam: Camera) -> list[Instance]:
     return out
 
 
+# 자동 찍기에서, 테두리 자동 맞춤 뒤에도 윤곽이 사진 테두리와 평균 이만큼 넘게 떨어지면 브라켓이 아닌 것으로 보고 뺀다
+# (불량 검사의 "브라켓 아님" 기준과 같다. 진짜 브라켓 0.1~1.7 px, 책상 볼트 구멍 4~5 px 였다).
+AUTO_FAKE_EDGE_PX = 3.0
+
+
+def auto_guess(model, bgr: np.ndarray, cam: Camera) -> list[Instance]:
+    """자동 찍기: 모델이 찍은 점 → 책상 붙이기 → 테두리 자동 맞춤. 가짜 (윤곽이 안 맞음) 는 뺀다.
+
+    점은 모델 점 (가장 약한 무게) 으로 둬서, 사람이 하나만 옮겨도 자세가 그쪽을 따라간다.
+    """
+    h, w = bgr.shape[:2]
+    out = []
+    for inst in model_guess(model, bgr, cam):
+        if inst.T_cam_obj is None:
+            continue
+        res = fit_edges(bgr, cam.T_base_cam @ inst.T_cam_obj, cam)
+        if res is None or res[1] > AUTO_FAKE_EDGE_PX:
+            continue
+        set_pose(inst, res[0], cam, SRC_MODEL)
+        fit(inst, cam, w, h)
+        out.append(inst)
+    return out
+
+
 # ---------------------------------------------------------------- 안내 그림 · 확대경
 
 GUIDE_H = 300
@@ -887,6 +930,8 @@ class Session:
         self.hover: tuple[float, float] | None = None
         self.bright = 0  # 사진을 바꿔도 유지
         self.img: np.ndarray | None = None  # 지금 사진 (자동 맞춤용)
+        self.model = None  # 자동 찍기 모델 (없으면 m 이 안 된다)
+        self.auto = False  # 자동 찍기 켜짐 (사진을 바꿔도 유지)
 
     # 상태
     def push(self) -> None:
@@ -977,6 +1022,24 @@ class Session:
     # 키
     def key(self, k: int) -> None:
         inst = self.selected()
+        if k == ord("m"):
+            if self.model is None:
+                self.note = "자동 찍기 모델이 없습니다 (--weights 확인)"
+                return
+            self.auto = not self.auto
+            if not self.auto:
+                self.note = "자동 찍기 끔: 다음 사진부터 직접 찍기"
+                return
+            # 아직 아무것도 안 찍은 사진이면 지금 사진부터 자동으로 찍는다
+            if self.img is not None and not any((i.src != SRC_MODEL).any() and (i.vis != UNSET).any() for i in self.insts):
+                self.push()
+                self.insts = auto_guess(self.model, self.img, self.cam)
+                self.sel, self.cur = 0, 0
+                self.refit()
+                self.note = f"자동 찍기 켬: 브라켓 {len(self.insts)}개를 찍고 맞춤. 윤곽 확인 후 n"
+            else:
+                self.note = "자동 찍기 켬: 이 사진은 직접 찍은 것을 두고, 다음 사진부터 자동"
+            return
         if ord("0") <= k <= ord("9") and k - ord("0") < N_KPT:
             self.cur = k - ord("0")
             self.note = f"{self.cur}번은 자동 점 (자세에서 채움)" if IS_AUTO[self.cur] else ""
@@ -1073,6 +1136,7 @@ class Session:
                     put_text(vis, str(i), (p[0] + 6, p[1] - 6), 0.45, COLORS[i] if i != 9 else (230, 230, 230), 1)
         big = ""
         top = [f"{index + 1}/{total} {name}  브라켓 {self.sel + 1 if self.insts else 0}/{len(self.insts)}  지금 번호 {self.cur}"
+               + ("  [자동 찍기 켜짐]" if self.auto else "  [직접 찍기, m = 자동]")
                + (f"  [{BRIGHT_NAMES[self.bright]}]" if self.bright else "")]
         inst = self.selected()
         warn = []
@@ -1104,7 +1168,7 @@ class Session:
         for line in reds:
             put_text(bar, line, (10, y), 0.65, (80, 80, 255), 2)
             y += 28
-        help_lines = ["클릭 = 지금 번호 찍기,  끌기 = 옮기기", "0~9 번호   h 가려짐   x 지우기",
+        help_lines = ["클릭 = 지금 번호 찍기,  끌기 = 옮기기", "m 자동 찍기   0~9 번호   h 가려짐   x 지우기",
                       "f 테두리 자동 맞춤   k 자세 바꾸기", "g 책상 붙이기   b 밝게   a 브라켓 추가",
                       "Tab 다음 브라켓   D 삭제",
                       "u / 우클릭 되돌리기", "s 저장   n / p 다음 · 이전 사진   q 끝"]
@@ -1127,12 +1191,29 @@ def _image_paths(images_dir: Path, split: str) -> list[Path]:
     return paths
 
 
+def _refuse_box_labels(labels_dir: Path) -> None:
+    """박스 라벨 (label.py, 한 줄 5 칸) 폴더면 멈춘다. 같은 이름 txt 로 저장해 박스 라벨을 덮어쓰지 않게."""
+    if not labels_dir.is_dir():
+        return
+    for f in sorted(labels_dir.glob("*.txt"))[:20]:
+        if f.name == "kpt_set.txt":
+            continue
+        line = next((ln for ln in f.read_text(encoding="utf-8").splitlines() if ln.strip()), "")
+        if len(line.split()) == 5:
+            raise SystemExit(
+                f"{labels_dir} 에는 박스 라벨 (label.py) 이 있습니다. 덮어쓰지 않게 키포인트 라벨은 다른 폴더에:\n"
+                f"  --labels {labels_dir.parent / 'kpt_labels'}"
+            )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="브라켓 키포인트 라벨 (YOLO-pose)")
-    ap.add_argument("--images", type=Path, default=KPT_DIR / "images")
-    ap.add_argument("--labels", type=Path, default=None, help="기본: 사진 폴더 옆 labels")
+    ap.add_argument("--images", type=Path, default=RAW_IMAGES, help="기본: 5차시에 찍은 사진 (datasets/raw/images)")
+    ap.add_argument("--labels", type=Path, default=None,
+                    help="기본: 수업 사진이면 datasets/raw/kpt_labels (박스 라벨과 따로), 아니면 사진 폴더 옆 labels")
     ap.add_argument("--camera", type=Path, default=None, help="camera.json (K, T_base_cam, dist). 기본: 폴더 옆 → calib/ → 이 PC")
-    ap.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="미리 찍을 모델. '' 이면 안 씀")
+    ap.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="자동 찍기 모델. '' 이면 안 씀")
+    ap.add_argument("--auto", action="store_true", help="자동 찍기를 켜고 시작 (기본: 직접 찍기로 시작, m 으로 켬)")
     ap.add_argument("--split", choices=("all", "train", "test"), default="all", help="split.json 의 어느 쪽만")
     ap.add_argument("--scale", type=float, default=1.5, help="화면 확대 (정밀하게 찍기)")
     args = ap.parse_args()
@@ -1140,7 +1221,13 @@ def main() -> None:
     images = _image_paths(args.images, args.split)
     if not images:
         raise SystemExit(f"사진이 없습니다: {args.images}")
-    labels_dir = args.labels or args.images.parent / "labels"
+    if args.labels is not None:
+        labels_dir = args.labels
+    elif args.images.resolve() == RAW_IMAGES.resolve():
+        labels_dir = RAW_KPT_LABELS  # 같은 사진의 박스 라벨 (raw/labels) 과 섞이지 않게
+    else:
+        labels_dir = args.images.parent / "labels"
+    _refuse_box_labels(labels_dir)
     labels_dir.mkdir(parents=True, exist_ok=True)
     # 키포인트 묶음이 다른 라벨과 섞이지 않게 폴더에 적어 둔다.
     tag = labels_dir / "kpt_set.txt"
@@ -1155,9 +1242,15 @@ def main() -> None:
         from ultralytics import YOLO
 
         model = YOLO(args.weights)
-        print(f"미리 찍기 모델: {args.weights}")
+        print(f"자동 찍기 모델: {args.weights}  (m 으로 켜기). 준비 중...")
+        # 첫 m 이 느리지 않게 모델 · CAD 광선 · 자세 후보를 미리 불러 둔다 (안 하면 첫 번에 7 초쯤)
+        model.predict(np.zeros((480, 640, 3), np.uint8), verbose=False)
+        _ray_scene()
+        desk_candidates()
 
     sess = Session(cam, args.scale)
+    sess.model = model
+    sess.auto = bool(args.auto and model is not None)
     idx = 0
 
     def open_image(i: int) -> np.ndarray:
@@ -1168,12 +1261,12 @@ def main() -> None:
         if lab.is_file():
             sess.insts = load_labels(lab, sess.w, sess.h)
             sess.note = ""
-        elif model is not None:
-            sess.insts = model_guess(model, bgr, cam)
-            sess.note = f"모델이 미리 찍음 ({len(sess.insts)}개). 윤곽 확인 후 s 또는 n"
+        elif sess.auto and model is not None:
+            sess.insts = auto_guess(model, bgr, cam)
+            sess.note = f"자동으로 찍고 맞춤 ({len(sess.insts)}개). 윤곽 확인 후 n, 틀린 점만 옮기기"
         else:
             sess.insts = []
-            sess.note = ""
+            sess.note = "직접 찍기: 0번부터 클릭" + ("  (몇 장 해 본 뒤 m = 자동 찍기)" if model is not None else "")
         sess.sel, sess.cur, sess.history, sess.drag = 0, 0, [], None
         sess.refit()
         return bgr

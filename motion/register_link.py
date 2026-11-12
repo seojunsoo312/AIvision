@@ -5,6 +5,8 @@ roi_cloud 가 같은 id 로 상태 파일에 state 를 쓴다.
 
   run     요청을 받아 등록 중
   ok      끝. xyz_mm, rpy_deg 가 같이 온다 (로봇 베이스, mm·deg)
+          "all" 요청 ({"id", "all": true}, load_all_pick_targets) 이면 objects 목록이 온다:
+          브라켓마다 {xyz_mm, rpy_deg, pose, color, verdict}. 로봇에서 가까운 순.
   busy    이미 다른 등록 중이라 받지 않음
   no_box  바운딩 박스가 없음
   fail    등록 실패
@@ -60,21 +62,31 @@ def _read_json(path: Path) -> dict | None:
 
 def read_request() -> str | None:
     """요청 id. 없거나 깨졌으면 None."""
-    data = _read_json(REGISTER_REQUEST_JSON)
-    rid = data.get("id") if data is not None else None
-    if not isinstance(rid, str) or not rid:
-        return None
+    rid, _all = read_request_full()
     return rid
 
 
-def write_status(req_id: str, state: str, *, xyz=None, rpy=None) -> None:
-    """state: run, busy, no_box, fail, ok. ok 이면 xyz(mm), rpy(deg) 를 같이 준다."""
+def read_request_full() -> tuple[str | None, bool]:
+    """(요청 id, 모든 브라켓을 원하는지). 없거나 깨졌으면 (None, False)."""
+    data = _read_json(REGISTER_REQUEST_JSON)
+    rid = data.get("id") if data is not None else None
+    if not isinstance(rid, str) or not rid:
+        return None, False
+    return rid, bool(data.get("all", False))
+
+
+def write_status(req_id: str, state: str, *, xyz=None, rpy=None, objects: list[dict] | None = None) -> None:
+    """state: run, busy, no_box, fail, ok. ok 이면 xyz(mm), rpy(deg) 를, all 요청이면 objects 를 같이 준다."""
     payload: dict = {"id": str(req_id), "state": state}
     if xyz is not None and rpy is not None:
         payload["xyz_mm"] = [float(v) for v in xyz]
         payload["rpy_deg"] = [float(v) for v in rpy]
+    if objects is not None:
+        payload["objects"] = objects
     _write_json(REGISTER_STATUS_JSON, payload)
-    if state == "ok":
+    if state == "ok" and objects is not None:
+        _log.info("요청 %s → ok  브라켓 %d개", req_id[:8], len(objects))
+    elif state == "ok":
         _log.info(
             "요청 %s → ok  xyz=%s  rpy=%s",
             req_id[:8],
@@ -95,23 +107,29 @@ class RegisterRequest:
     ok 이면 xyz_mm, rpy_deg 에 결과가 있다.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, all_objects: bool = False) -> None:
         self.id = uuid.uuid4().hex
         self.state = "wait"
+        self.all_objects = bool(all_objects)
         self.xyz_mm: tuple[float, float, float] | None = None
         self.rpy_deg: tuple[float, float, float] | None = None
+        # all 요청의 결과: 브라켓마다 {"xyz_mm", "rpy_deg", "pose", "color", "verdict"}
+        self.objects: list[dict] | None = None
         self._accepted = False
         self._ack_deadline = 0.0
         self._job_deadline = 0.0
 
     @classmethod
-    def send(cls) -> RegisterRequest:
-        """요청 파일을 쓴다. 쓰지 못하면 OSError."""
-        req = cls()
+    def send(cls, all_objects: bool = False) -> RegisterRequest:
+        """요청 파일을 쓴다. all_objects 면 보이는 브라켓 모두를 요청한다. 쓰지 못하면 OSError."""
+        req = cls(all_objects)
         now = time.monotonic()
         req._ack_deadline = now + REG_ACK_S
         req._job_deadline = now + REG_JOB_S
-        _write_json(REGISTER_REQUEST_JSON, {"id": req.id})
+        payload = {"id": req.id}
+        if all_objects:
+            payload["all"] = True
+        _write_json(REGISTER_REQUEST_JSON, payload)
         return req
 
     @property
@@ -149,6 +167,8 @@ class RegisterRequest:
         return self.state
 
     def _take_pose(self, data: dict) -> bool:
+        if self.all_objects:
+            return self._take_objects(data)
         xyz = data.get("xyz_mm")
         rpy = data.get("rpy_deg")
         if not isinstance(xyz, list) or not isinstance(rpy, list) or len(xyz) < 3 or len(rpy) < 3:
@@ -158,4 +178,23 @@ class RegisterRequest:
             self.rpy_deg = (float(rpy[0]), float(rpy[1]), float(rpy[2]))
         except (TypeError, ValueError):
             return False
+        return True
+
+    def _take_objects(self, data: dict) -> bool:
+        objs = data.get("objects")
+        if not isinstance(objs, list):
+            return False
+        out = []
+        try:
+            for o in objs:
+                out.append({
+                    "xyz_mm": tuple(float(v) for v in o["xyz_mm"][:3]),
+                    "rpy_deg": tuple(float(v) for v in o["rpy_deg"][:3]),
+                    "pose": str(o.get("pose", "")),
+                    "color": str(o.get("color", "")),
+                    "verdict": str(o.get("verdict", "")),
+                })
+        except (KeyError, TypeError, ValueError, IndexError):
+            return False
+        self.objects = out
         return True

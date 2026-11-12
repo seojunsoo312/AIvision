@@ -32,7 +32,34 @@ DATA_YAML = ROOT / "data.yaml"
 WEIGHTS_DIR = ROOT / "weights"
 RUNS_DIR = ROOT / "runs"
 # 등록 요청 파일(runs/roi/)과 대기 시간은 motion/register_link.py.
-BEST_PT = WEIGHTS_DIR / "best.pt"
+# 가중치 이름 (모두 yolo/weights/, git 에 없음):
+#   box_base.pt  박스 기본 모델 (강사가 미리 넣어 둠, box_base.py 가 만든다)   → 5차시 학습의 출발점
+#   box_best.pt  학생이 5차시에 학습한 박스 모델 (train.py 가 만든다)
+#   kpt_base.pt  키포인트 기본 모델 (강사가 미리 넣어 둠, 노트북의 v4n_ft2)   → 6차시 학습의 출발점
+#   kpt_best.pt  학생이 6차시에 학습한 키포인트 모델 (kpt_train.py 가 만든다)
+# 초기화 (reset_class.py) 는 *_best.pt 만 지운다.
+BEST_PT = WEIGHTS_DIR / "box_best.pt"
+BOX_BASE_PT = WEIGHTS_DIR / "box_base.pt"
+KPT_BASE_PT = WEIGHTS_DIR / "kpt_base.pt"
+KPT_BEST_PT = WEIGHTS_DIR / "kpt_best.pt"
+# 예전 이름. 이름을 바꾸기 전의 보드는 이 파일만 있다 → box_best_pt() · box_base_pt() 가 대신 쓴다.
+OLD_BEST_PT = WEIGHTS_DIR / "best.pt"
+OLD_BOX_BASE_PT = WEIGHTS_DIR / "bracket_base.pt"
+
+
+def box_best_pt():
+    """박스 모델 경로. box_best.pt 가 없고 예전 이름 best.pt 만 있으면 그것을 쓴다."""
+    if not BEST_PT.exists() and OLD_BEST_PT.exists():
+        print(f"박스 모델: 예전 이름 {OLD_BEST_PT.name} 을 씁니다 (새 이름은 {BEST_PT.name}).")
+        return OLD_BEST_PT
+    return BEST_PT
+
+
+def box_base_pt():
+    """박스 기본 모델 경로. box_base.pt 가 없고 예전 이름 bracket_base.pt 만 있으면 그것을 쓴다."""
+    if not BOX_BASE_PT.exists() and OLD_BOX_BASE_PT.exists():
+        return OLD_BOX_BASE_PT
+    return BOX_BASE_PT
 
 # 부품 이름(class)은 cad/model.yaml 에만 둔다. 읽기는 cad.model.
 CLASS_NAME = class_name()

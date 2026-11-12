@@ -54,7 +54,7 @@ gui_app.py  ──cmd──►  motion.Controller  ──q──►  Visualizer
 
 teach_grasp.py ──접근 자세──► 같은 Controller, 같은 Meshcat
        │
-       └──등록 요청──►  yolo/pose/roi_cloud.py (--cad)
+       └──등록 요청──►  yolo/pose/roi_cloud.py (--pose cad | kpt)
                         (motion/register_link.py)
 ```
 

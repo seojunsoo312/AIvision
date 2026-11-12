@@ -4,6 +4,7 @@
 브라켓은 CAD 프레임(mesh_rpy 적용 후) 정점으로 만들어, body 자세가 곧 정합 결과 T(CAD → 베이스)와 같은 뜻이다.
 
     python -m vision.sim.scene --count 1 --objects 1 --seed 0
+    python -m vision.sim.scene --count 30 --objects 5 --pile --out vision/sim/out/scenes_pile   # 쌓인 더미 (빈 피킹)
 """
 
 from __future__ import annotations
@@ -42,6 +43,11 @@ PLACE_Y_MM = (-180.0, 180.0)
 ROBOT_KEEPOUT_MM = 90.0
 # 브라켓끼리 이만큼은 떨어져 있어야 한다 (가장 가까운 점 사이 xy 거리).
 MIN_GAP_MM = 30.0
+# 쌓인 더미 (--pile): 더미 중심 범위와, 중심에서 브라켓마다 흩어지는 정도
+PILE_X_MM = (150.0, 220.0)
+PILE_Y_MM = (-90.0, 90.0)
+PILE_SPREAD_MM = 22.0
+PILE_CUP_MM = 100.0  # 쌓을 때 쓰는 보이지 않는 통 안쪽 폭
 
 DESK_RGBA = (0.74, 0.74, 0.76, 1.0)
 # 학습 데이터의 브라켓 색 비율: 흰색 · 은색 · 검정. 수업은 흰색을 쓰지만 다른 색도 견디게.
@@ -131,12 +137,15 @@ def build_xml(
     height: int = HEIGHT,
     n_distractors: int = 0,
     robot_parts: list[dict] | None = None,
+    pile_walls: bool = False,
 ) -> str:
     """책상 + 조명 + 카메라 + 브라켓 n 개 (각자 freejoint) + 방해물 n_distractors 개 MJCF 문자열.
 
     방해물은 물리 없이 자리만 정하는 mocap 물체다 (상자 · 원통 · 캡슐 · 타원체 · 구를 돌아가며).
     크기 · 색 · 자리는 장면마다 SceneMaker.place_distractors 가 바꾼다.
     robot_parts 를 주면 로봇 팔 메시를 부품마다 mocap 물체로 넣는다 (자세는 SceneMaker.set_robot).
+    pile_walls 면 쌓기용 보이지 않는 통 벽을 넣는다. 브라켓 충돌은 메시의 볼록 껍질이다.
+    이 브라켓은 양쪽 가장자리에 삼각 리브가 있어 실물도 삼각기둥에 가깝다 (L 자 안쪽이 거의 막혀 있다).
     """
     verts_m, faces = load_mesh_m()
     R = T_base_cam[:3, :3]
@@ -144,15 +153,24 @@ def build_xml(
     # MuJoCo 카메라: x 오른쪽, y 위, −z 앞. OpenCV: x 오른쪽, y 아래, +z 앞.
     xyaxes = np.concatenate([R[:, 0], -R[:, 1]])
     bodies = []
+    contact = 'friction="0.6 0.005 0.0001" condim="4" solref="0.004 1"'
     for i in range(n_objects):
         bodies.append(
             f"""
     <body name="bracket{i}" pos="{0.15 + 0.06 * i} 0 0.1">
       <freejoint name="free{i}"/>
-      <geom name="bracket{i}" type="mesh" mesh="bracket" material="bracket"
-            friction="0.6 0.005 0.0001" condim="4" solref="0.004 1"/>
+      <geom name="bracket{i}" type="mesh" mesh="bracket" material="bracket" {contact}/>
     </body>"""
         )
+    if pile_walls:
+        # 쌓기용 보이지 않는 통 벽 4 장 (mocap). 다 떨어뜨린 뒤 치운다 (컵을 들어 올리듯). 그룹 3 은 렌더 안 됨
+        for k in range(4):
+            bodies.append(
+                f"""
+    <body name="pilewall{k}" mocap="true" pos="3 {3 + 0.2 * k} 0">
+      <geom type="box" size="{PILE_CUP_MM / 2000:.4f} 0.002 0.06" group="3" rgba="0 0 0 0" {contact}/>
+    </body>"""
+            )
     for j in range(n_distractors):
         kind = DISTRACTOR_KINDS[j % len(DISTRACTOR_KINDS)]
         bodies.append(
@@ -254,6 +272,7 @@ class SceneMaker:
         fovy_deg: float = FOVY_DEG,
         n_distractors: int = 0,
         robot: bool = False,
+        pile: bool = False,
     ) -> None:
         self.n = int(n_objects)
         self.n_distract = int(n_distractors)
@@ -276,6 +295,7 @@ class SceneMaker:
         self.K = camera_K(fovy_deg)
         self.model = mujoco.MjModel.from_xml_string(
             build_xml(self.n, T_base_cam=self.T_base_cam, fovy_deg=fovy_deg, n_distractors=self.n_distract,
+                      pile_walls=bool(pile),
                       robot_parts=parts)
         )
         self.data = mujoco.MjData(self.model)
@@ -300,6 +320,11 @@ class SceneMaker:
         ]
         # 이번 장면에 보이는 방해물 수. make() 전에 정한다.
         self.distract_active = 0
+        self.pile = bool(pile)  # True 면 한 자리에 떨어뜨려 쌓는다 (빈 피킹 시험)
+        self.wall_mocap = [
+            int(self.model.body_mocapid[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f"pilewall{k}")])
+            for k in range(4)
+        ] if self.pile else []
         self.robot_mocap = [
             int(self.model.body_mocapid[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, p_["name"])])
             for p_ in parts
@@ -465,14 +490,67 @@ class SceneMaker:
         mujoco.mj_forward(self.model, self.data)
 
     def _drop(self, rng: np.random.Generator) -> None:
+        if self.pile:
+            self._drop_pile(rng)
+            return
         self.start_drop(rng)
         while not self.step():
             pass
         self.freeze()
 
+    def _set_walls(self, c_mm: np.ndarray | None) -> None:
+        """보이지 않는 통 벽을 c 둘레에 세운다. None 이면 멀리 치운다."""
+        h = PILE_CUP_MM / 2000.0 + 0.002
+        for k, mid in enumerate(self.wall_mocap):
+            if c_mm is None:
+                self.data.mocap_pos[mid] = [3.0, 3.0 + 0.2 * k, 0.0]
+                continue
+            cx, cy = c_mm / 1000.0
+            if k < 2:  # x 쪽 두 장 (벽 판은 x 로 길다 → y 를 바꿔 세운다)
+                self.data.mocap_pos[mid] = [cx, cy + (h if k == 0 else -h), 0.06]
+                self.data.mocap_quat[mid] = [1.0, 0.0, 0.0, 0.0]
+            else:  # z 축으로 90° 돌려 y 로 길게
+                self.data.mocap_pos[mid] = [cx + (h if k == 2 else -h), cy, 0.06]
+                self.data.mocap_quat[mid] = [np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)]
+        mujoco.mj_forward(self.model, self.data)
+
+    def _settle(self) -> None:
+        self._still_s = 0.0
+        self._t_s = 0.0
+        while not self.step():
+            pass
+
+    def _drop_pile(self, rng: np.random.Generator) -> None:
+        """쌓인 더미: 책상 위에서는 L 자가 서로 미끄러져 흩어진다. 보이지 않는 통 안에 하나씩 떨어뜨리고,
+        다 쌓이면 통을 치워 (컵을 들어 올리듯) 버틸 수 있는 더미만 남긴다."""
+        self.start_drop(rng)
+        c = np.array([rng.uniform(*PILE_X_MM), rng.uniform(*PILE_Y_MM)])
+        self._set_walls(c)
+        # 아직 안 놓은 브라켓은 카메라 밖으로
+        for i in range(self.active):
+            a = self.qadr[i]
+            self.data.qpos[a : a + 3] = [0.9, 0.5 + 0.1 * i, 0.03]
+        mujoco.mj_forward(self.model, self.data)
+        for i in range(self.active):
+            # 통 안쪽에서 CAD 원점 (모서리) 자리. 몸통이 원점에서 +쪽으로 뻗으므로 조금 당긴다
+            xy = c - 15.0 + rng.uniform(-(PILE_CUP_MM / 2 - 25.0), PILE_CUP_MM / 2 - 25.0, size=2)
+            top = max([self._world_verts(j)[:, 2].max() for j in range(i)] + [0.0])
+            a = self.qadr[i]
+            # CAD 원점은 모서리라 몸통이 원점에서 최대 42 mm 까지 뻗는다. 꼭대기 + 여유만큼 띄운다
+            self.data.qpos[a : a + 3] = [xy[0] / 1000.0, xy[1] / 1000.0, (top + 45.0) / 1000.0]
+            self.data.qpos[a + 3 : a + 7] = _random_quat(rng)
+            self.data.qvel[:] = 0.0
+            mujoco.mj_forward(self.model, self.data)
+            self._settle()
+        self._set_walls(None)
+        self._settle()
+        self.freeze()
+
     def placement_ok(self) -> bool:
         """범위 안, 로봇 둘레 밖, 책상에 붙어 있고, 서로 MIN_GAP_MM 이상 떨어져 있으면 True."""
         pts = [self._world_verts(i) for i in range(self.active)]
+        if self.pile:
+            return self._pile_ok(pts)
         for i, p in enumerate(pts):
             c = p.mean(axis=0)
             if not (PLACE_X_MM[0] - 20 <= c[0] <= PLACE_X_MM[1] + 20 and PLACE_Y_MM[0] - 20 <= c[1] <= PLACE_Y_MM[1] + 20):
@@ -488,6 +566,22 @@ class SceneMaker:
                 if d < MIN_GAP_MM:
                     return False
         return True
+
+    def _pile_ok(self, pts: list[np.ndarray]) -> bool:
+        """쌓인 더미: 모두 범위 안 · 책상 위 (밑으로 파고들지 않음), 그리고 둘 이상은 다른 브라켓에 얹혀 있다.
+
+        얹힘 = 책상에서 3 mm 넘게 떠 있거나, 책상 위 세 자세에서 10° 넘게 기울어 있음 (다른 브라켓에 기댐).
+        """
+        lifted = 0
+        for i, p in enumerate(pts):
+            c = p.mean(axis=0)
+            if not (PLACE_X_MM[0] - 20 <= c[0] <= PLACE_X_MM[1] + 20 and PLACE_Y_MM[0] - 20 <= c[1] <= PLACE_Y_MM[1] + 20):
+                return False
+            if np.hypot(c[0], c[1]) < ROBOT_KEEPOUT_MM or p[:, 2].min() < -1.0:
+                return False
+            _cid, tilt = pose_class(self.T_base_obj(i)[:3, :3])
+            lifted += int(p[:, 2].min() > 3.0 or tilt > 10.0)
+        return lifted >= 2
 
     # ---- 렌더 ----
 
@@ -664,8 +758,9 @@ def main() -> None:
     ap.add_argument("--cam-jitter", action="store_true", help="장면마다 카메라 자세를 손눈 오차만큼 흔든다")
     ap.add_argument("--distractors", type=int, default=0, help="장면마다 방해물 0~N 개")
     ap.add_argument("--robot", action="store_true", help="로봇 팔을 시작 자세(INIT_POSE)로 넣는다")
+    ap.add_argument("--pile", action="store_true", help="브라켓을 한 자리에 쌓는다 (빈 피킹 시험). 하나 이상은 다른 브라켓 위")
     args = ap.parse_args()
-    maker = SceneMaker(args.objects, n_distractors=args.distractors, robot=args.robot)
+    maker = SceneMaker(args.objects, n_distractors=args.distractors, robot=args.robot, pile=args.pile)
     rng = np.random.default_rng(args.seed)
     # 겉모습 · 카메라 난수는 따로 둔다. 물리(놓인 자세)는 rng 만 쓰므로 겉모습을 바꿔도 같은 자세가 나온다.
     look_rng = np.random.default_rng(args.seed + 10_000)

@@ -229,8 +229,8 @@ ok "pip, conda 캐시 ($(df -h / | awk 'NR==2 {print $3}') 사용 중)"
 
 # ---------------------------------------------------------------- 9. 수동으로 할 일
 say "9. 스크립트가 하지 않는 일"
-[ -f "$PROJECT_DIR/yolo/weights/best.pt" ] && skip "yolo/weights/best.pt" \
-  || warn "yolo/weights/best.pt 가 없습니다. 학습한 가중치를 USB 로 복사하세요 (git 에 없음)."
+[ -f "$PROJECT_DIR/yolo/weights/box_best.pt" ] && skip "yolo/weights/box_best.pt (박스 모델)" \
+  || ok "박스 모델 yolo/weights/box_best.pt 없음 — 학생이 5차시에 학습하면 생깁니다 (정상)"
 [ -e /dev/so101_follower ] && [ -e /dev/so101_leader ] && skip "팔 시리얼 이름" \
   || warn "팔 시리얼 이름 규칙: bash deploy/make_serial_rules.sh (팔을 하나씩 꽂으며 진행)"
 [ -f "$HOME/.cache/huggingface/lerobot/calibration/robots/so_follower/follower.json" ] && skip "팔로워 캘리브" \

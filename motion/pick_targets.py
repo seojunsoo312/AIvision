@@ -39,6 +39,23 @@ class PickTargets:
     place_rpy: list[float]
 
 
+@dataclass(frozen=True)
+class SeenObject:
+    """카메라가 찾은 브라켓 하나 (load_all_pick_targets). 위치는 mm, 자세는 deg."""
+
+    xyz: list[float]  # 물체 위치 (로봇 베이스)
+    rpy: list[float]  # 물체 방향
+    pose: str  # 놓인 자세: 세우기 / 눕히기 / 비스듬히
+    color: str  # 흰 / 검
+    verdict: str  # 양품 / 불량 / 검사 안 함 (검은 브라켓)
+    pick: PickTargets | None  # 대기 · 집기 · 놓기 자세. 계산하지 못하면 None (닿는지는 움직일 때 확인)
+
+    @property
+    def distance(self) -> float:
+        """로봇 베이스 중심에서 물체까지 바닥 거리 (mm)."""
+        return round(float(np.hypot(self.xyz[0], self.xyz[1])), 1)
+
+
 def load_pick_targets(arm: Arm | None = None) -> PickTargets:
     """카메라 창에 물체 등록을 요청하고, 그 6D로 대기·집기·놓기 자세를 만든다.
 
@@ -46,12 +63,45 @@ def load_pick_targets(arm: Arm | None = None) -> PickTargets:
     arm을 주면 그 관절로 손목 자세를 고르고, 없으면 홈 관절을 쓴다.
     """
     place = _request_place()
+    return _targets(place, *_seed(arm))
+
+
+def load_all_pick_targets(arm: Arm | None = None) -> list[SeenObject]:
+    """카메라 창에 보이는 브라켓을 모두 요청한다. 브라켓마다 위치 · 자세 · 색 · 판정과 집기 좌표.
+
+    로봇에서 가까운 순서로 돌려준다. 순서를 바꾸려면 sorted(objs, key=...) 로 직접 정한다.
+    카메라 창의 자세 방식 (CAD 정합 / 키포인트) 으로 구하고, 판정은 카메라 창 i 검사와 같다.
+    집기 자세를 계산하지 못한 브라켓은 pick 이 None 이다. 팔이 닿는지는 moveL 할 때 확인된다.
+    """
+    try:
+        req = RegisterRequest.send(all_objects=True)
+    except OSError as exc:
+        raise ArmError(REG_MSG_NO_REPLY) from exc
+    state = req.wait()
+    if state != "ok":
+        raise ArmError(_REG_ERRORS[state])
+    kin, q = _seed(arm)
+    out = []
+    for o in req.objects or []:
+        place = PlacePose(xyz_mm=o["xyz_mm"], rpy_deg=o["rpy_deg"])
+        try:
+            pick = _targets(place, kin, q)
+        except ArmError:
+            raise
+        except Exception:
+            pick = None  # 이 자세로는 집기 자세를 못 만듦
+        out.append(SeenObject(xyz=_vec(o["xyz_mm"]), rpy=_vec(o["rpy_deg"]), pose=o["pose"],
+                              color=o["color"], verdict=o["verdict"], pick=pick))
+    return out
+
+
+def _targets(place: PlacePose, kin, q) -> PickTargets:
+    """물체 6D → 대기 · 집기 · 놓기 자세."""
     try:
         mins_mm, maxs_mm = bounds_mm()
     except Exception as exc:
         raise ArmError(f"CAD를 읽지 못했습니다 ({exc})") from exc
     d_mm, a_mm = approach_mm()
-    kin, q = _seed(arm)
     auto = compute_auto_pre(
         place,
         mins_mm,
