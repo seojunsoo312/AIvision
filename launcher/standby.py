@@ -4,6 +4,7 @@
 팔은 연결하지 않는다. 런처의 「켜기」가 보내는 명령에 따라 그 프로그램이 된다.
   start demo x,y,w,h [인자…]     → 반복 데모 (repeat_demo.main, 뒤 인자는 그대로 넘김)
   start teleop x,y,w,h [인자…]   → 원격 조종 (teleop.main)
+  start vision_pick x,y,w,h [인자…] → 카메라로 집기 (vision_pick.main)
   off                            → 그냥 끝
 메모리를 많이 써서 (1GB 넘게) 프로그램마다 따로 두지 않고 하나만 둔다.
 """
@@ -40,10 +41,12 @@ def main() -> int:
             if warm.viz is not None:
                 warm.viz.close()
             return 0
-        if parts[0] == "start" and len(parts) >= 2 and parts[1] in ("demo", "teleop"):
+        if parts[0] == "start" and len(parts) >= 2 and parts[1] in ("demo", "teleop", "vision_pick"):
             break
     if parts[1] == "demo":
         import repeat_demo as job
+    elif parts[1] == "vision_pick":
+        import vision_pick as job
     else:
         import teleop as job
     argv = (["--sim"] if args.sim else []) + (["--no-viz"] if args.no_viz else [])

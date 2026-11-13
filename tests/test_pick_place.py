@@ -116,6 +116,9 @@ class FakeController:
     def set_holding(self, on):
         self._holding = bool(on)
 
+    def keep_gripper_if_holding(self, joints_deg):
+        return dict(joints_deg)
+
     def interrupt_id(self):
         return 0
 

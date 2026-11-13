@@ -4,13 +4,13 @@
   python launcher/launcher.py          # 실제 팔
   python launcher/launcher.py --sim    # 가상 팔로 시험
 
-버튼은 줄마다 [켜기] [끄기] [정지]. 「반복 데모」·「원격 조종」·「펜던트」·「카메라 창」이 동작하고
-「카메라로 집기」는 준비 중이다. 반복 데모 · 원격 조종 · 펜던트는 같은 팔을 쓰므로 한 번에 하나만 켠다.
-카메라 창은 팔을 쓰지 않아 같이 켤 수 있다 (펜던트의 사물 위치 칸은 카메라 창에서 위치를 받는다).
-각 프로그램 (launcher/repeat_demo.py · launcher/teleop.py) 을 따로 켜서 표준 입력으로 명령을 보내고,
-표준 출력으로 상태를 받는다.
+버튼은 줄마다 [켜기] [끄기] [정지]. 반복 데모 · 원격 조종 · 카메라로 집기 · 펜던트는 같은 팔을 쓰므로
+한 번에 하나만 켠다. 카메라 창은 팔을 쓰지 않아 같이 켤 수 있다 (펜던트의 사물 위치 칸과 「카메라로 집기」는
+카메라 창에서 위치를 받는다).
+각 프로그램 (launcher/repeat_demo.py · launcher/teleop.py · launcher/vision_pick.py) 을 따로 켜서
+표준 입력으로 명령을 보내고, 표준 출력으로 상태를 받는다.
 팔 모델 · lerobot 준비에 15초 가까이 걸려서, 런처가 뜰 때 launcher/standby.py 를 하나 미리 켜 둔다
-(팔은 연결하지 않음). 「켜기」를 누르면 그것에 "start demo|teleop" 을 보내 그 프로그램이 되게 한다.
+(팔은 연결하지 않음). 「켜기」를 누르면 그것에 "start demo|teleop|vision_pick" 을 보내 그 프로그램이 되게 한다.
 """
 
 from __future__ import annotations
@@ -81,7 +81,18 @@ JOBS = {
         enable={"connecting": ("off",), "aligning": ("off", "stop"), "running": ("off", "stop"),
                 "stopped": ("start", "off"), "error": ("start", "off"), "estop": ("off",)},
     ),
+    "vision_pick": Job(
+        title="카메라로 집기",
+        script="vision_pick.py",
+        state_ko={"connecting": "팔 연결 중", "homing": "초기자세로 이동", "running": "분류 중",
+                  "stopping": "이번 물체 후 멈춤", "stopped": "정지중", "turning_off": "끄는 중", "off": "꺼짐",
+                  "estop": "E-stop", "error": "멈춤 (실패)"},
+        enable={"connecting": ("off", "stop"), "homing": ("off", "stop"), "running": ("off", "stop"),
+                "stopping": ("off",), "stopped": ("start", "off"), "error": ("start", "off"), "estop": ("off",)},
+    ),
 }
+# 속도 슬라이더를 따르는 데모 (원격 조종은 리더를 따라가기만 한다).
+SPEED_JOBS = ("demo", "vision_pick")
 
 
 @dataclass(frozen=True)
@@ -249,7 +260,7 @@ class Launcher:
         self._section("데모")
         self._row("demo", "반복 데모", stop=True)
         self._row("teleop", "원격 조종", stop=True)
-        self._row("vision_pick", "카메라로 집기", stop=True, dummy=True)
+        self._row("vision_pick", "카메라로 집기", stop=True)
         self._section("도구")
         self._row("pendant", "펜던트", stop=False)
         self._row("camera", "카메라 창", stop=False)
@@ -300,8 +311,8 @@ class Launcher:
         if not (send and changed):
             return
         self._save_speed()
-        # 켜져 있는 반복 데모에는 바로 보낸다 (다음 이동부터).
-        if self.active == "demo" and self.proc is not None and self.proc.alive():
+        # 켜져 있는 데모에는 바로 보낸다 (다음 이동부터).
+        if self.active in SPEED_JOBS and self.proc is not None and self.proc.alive():
             self.proc.send(f"speed {pct}")
 
     def _load_speed(self) -> int:
@@ -318,7 +329,7 @@ class Launcher:
             pass
 
     def _job_args(self, key: str) -> list[str]:
-        return ["--speed", str(self.speed_pct)] if key == "demo" else []
+        return ["--speed", str(self.speed_pct)] if key in SPEED_JOBS else []
 
     # ------------------------------------------------------------ 미리 켜 두기
 
@@ -438,7 +449,7 @@ class Launcher:
             if on:
                 text = f"켜져 있음: {', '.join(on)}"
                 if self._arm_tool():
-                    text += "\n펜던트가 팔을 쓰는 동안 반복 데모 · 원격 조종은 켤 수 없습니다."
+                    text += "\n펜던트가 팔을 쓰는 동안 반복 데모 · 원격 조종 · 카메라로 집기는 켤 수 없습니다."
                 return text
             return "꺼짐 — 켤 프로그램의 「켜기」를 누르세요."
         job, st, ev = JOBS[self.active], self.state, self.info_ev
@@ -449,6 +460,16 @@ class Launcher:
                 line += f"\n물체 {ev['from']} → {ev['to']}"
                 if ev.get("step"):
                     line += f"   ·   단계: {ev['step']}"
+            return line
+        if self.active == "vision_pick":
+            line = (f"{job.title}: {job.state_ko.get(st, st)}   ·   담은 물체 흰 {ev.get('white', 0)} · "
+                    f"검 {ev.get('black', 0)}")
+            if ev.get("left") is not None:
+                line += f"   ·   남은 {ev['left']}개"
+            if st in ("running", "stopping") and ev.get("step"):
+                line += f"\n단계: {ev['step']}"
+            elif st == "stopped" and ev.get("msg"):
+                line += f"\n{ev['msg']}"
             return line
         line = f"{job.title}: {job.state_ko.get(st, st)}"
         if st == "stopped":
@@ -468,6 +489,7 @@ class Launcher:
         if self.proc is not None and self.proc.alive():
             if key == self.active and self.state in ("stopped", "error"):
                 self.popup.close()
+                self._popup_kind = ""
                 self.proc.send("start")
             return
         geometry = self._viz_geometry(key)
@@ -493,6 +515,9 @@ class Launcher:
         if key == "demo":
             self._popup_kind = "stop"
             self._popup("이번 사이클 수행 후 정지하겠습니다.")
+        elif key == "vision_pick":
+            self._popup_kind = "stop"
+            self._popup("지금 물체를 바구니에 담고 초기자세에서 정지하겠습니다.")
 
     def on_off(self, key: str) -> None:
         if key != self.active or self.proc is None or not self.proc.alive():
@@ -501,6 +526,8 @@ class Launcher:
         self._popup_kind = "off"
         if key == "demo" and self.state not in ("stopped", "error", "estop"):
             self._popup("이번 사이클 수행 후 끄겠습니다.")
+        elif key == "vision_pick" and self.state in ("running", "stopping"):
+            self._popup("지금 물체를 바구니에 담고 초기자세 → 앉은 자세로 간 뒤 끕니다.")
         else:
             self._popup("앉은 자세로 간 뒤 끕니다.")
 

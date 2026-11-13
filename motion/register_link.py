@@ -1,7 +1,13 @@
 """카메라 창(roi_cloud)에 물체 등록을 요청하고 결과를 받는다. JSON 파일 두 개로 주고받는다.
 
-요청 쪽(펜던트 「물체 위치 불러오기」, load_pick_targets)이 요청 파일에 {"id"} 를 쓰면,
-roi_cloud 가 같은 id 로 상태 파일에 state 를 쓴다.
+요청 쪽(펜던트 「물체 위치 불러오기」, load_pick_targets, 런처 「카메라로 집기」)이 요청 파일에
+{"id"} 를 쓰면, roi_cloud 가 같은 id 로 상태 파일에 state 를 쓴다.
+요청에 더 넣을 수 있는 것 (「카메라로 집기」가 쓴다, 모두 베이스 mm):
+  "exclude_xy_mm": [[x, y, r], ...]       이 원 안의 물체는 고르지 않는다
+  "region_xy_mm": [[x0, x1], [y0, y1]]    가운데가 이 사각형 안인 물체만 고른다
+  "nearest": true                         가장 높은 것 대신 베이스 원점에서 가장 가까운 것을 고른다
+그러면 ok 상태에 "gray" (고른 물체 점들의 밝기 중앙값 0–255) 와
+"targets_xy_mm" (고를 수 있던 물체 가운데 [x, y], 고르는 순서대로) 가 같이 온다.
 
   run     요청을 받아 등록 중
   ok      끝. xyz_mm, rpy_deg 가 같이 온다 (로봇 베이스, mm·deg)
@@ -17,6 +23,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from motion import runlog
@@ -67,9 +74,45 @@ def read_request() -> str | None:
     return rid
 
 
-def write_status(req_id: str, state: str, *, xyz=None, rpy=None) -> None:
-    """state: run, busy, no_box, fail, ok. ok 이면 xyz(mm), rpy(deg) 를 같이 준다."""
-    payload: dict = {"id": str(req_id), "state": state}
+@dataclass(frozen=True)
+class RequestOptions:
+    """요청에 붙은 고르는 조건. 아무것도 없으면 예전처럼 카메라 창이 고른 (가장 높은) 물체."""
+
+    exclude: tuple[tuple[float, float, float], ...] = ()
+    region: tuple[tuple[float, float], tuple[float, float]] | None = None
+    nearest: bool = False
+
+    @property
+    def active(self) -> bool:
+        return bool(self.exclude) or self.region is not None or self.nearest
+
+
+def read_request_options() -> RequestOptions:
+    """요청의 고르는 조건. 없거나 깨진 항목은 뺀다."""
+    data = _read_json(REGISTER_REQUEST_JSON) or {}
+    exclude = []
+    items = data.get("exclude_xy_mm")
+    for item in items if isinstance(items, list) else []:
+        try:
+            x, y, r = (float(v) for v in item)
+        except (TypeError, ValueError):
+            continue
+        if r > 0:
+            exclude.append((x, y, r))
+    region = None
+    try:
+        (x0, x1), (y0, y1) = ((float(a), float(b)) for a, b in data["region_xy_mm"])
+        if x0 < x1 and y0 < y1:
+            region = ((x0, x1), (y0, y1))
+    except (KeyError, TypeError, ValueError):
+        pass
+    return RequestOptions(exclude=tuple(exclude), region=region, nearest=data.get("nearest") is True)
+
+
+def write_status(req_id: str, state: str, *, xyz=None, rpy=None, extra: dict | None = None) -> None:
+    """state: run, busy, no_box, fail, ok. ok 이면 xyz(mm), rpy(deg) 를 같이 준다.
+    extra: 같이 실을 값 (gray, targets_xy_mm 등)."""
+    payload: dict = {"id": str(req_id), "state": state, **(extra or {})}
     if xyz is not None and rpy is not None:
         payload["xyz_mm"] = [float(v) for v in xyz]
         payload["rpy_deg"] = [float(v) for v in rpy]
@@ -100,18 +143,32 @@ class RegisterRequest:
         self.state = "wait"
         self.xyz_mm: tuple[float, float, float] | None = None
         self.rpy_deg: tuple[float, float, float] | None = None
+        # 요청에 조건을 붙였을 때만 온다.
+        self.gray: float | None = None
+        self.targets_xy_mm: list[tuple[float, float]] = []
         self._accepted = False
         self._ack_deadline = 0.0
         self._job_deadline = 0.0
 
     @classmethod
-    def send(cls) -> RegisterRequest:
-        """요청 파일을 쓴다. 쓰지 못하면 OSError."""
+    def send(cls, exclude_xy_mm=None, *, region_xy_mm=None, nearest: bool = False) -> RegisterRequest:
+        """요청 파일을 쓴다. 쓰지 못하면 OSError.
+
+        exclude_xy_mm: [(x, y, r), ...] 이 원 안의 물체는 고르지 않는다.
+        region_xy_mm: ((x0, x1), (y0, y1)) 이 사각형 안의 물체만. nearest: 베이스에서 가장 가까운 것부터.
+        """
         req = cls()
         now = time.monotonic()
         req._ack_deadline = now + REG_ACK_S
         req._job_deadline = now + REG_JOB_S
-        _write_json(REGISTER_REQUEST_JSON, {"id": req.id})
+        payload: dict = {"id": req.id}
+        if exclude_xy_mm:
+            payload["exclude_xy_mm"] = [[float(v) for v in item] for item in exclude_xy_mm]
+        if region_xy_mm is not None:
+            payload["region_xy_mm"] = [[float(v) for v in pair] for pair in region_xy_mm]
+        if nearest:
+            payload["nearest"] = True
+        _write_json(REGISTER_REQUEST_JSON, payload)
         return req
 
     @property
@@ -129,6 +186,7 @@ class RegisterRequest:
                 self._accepted = True
                 self.state = "run"
             elif state in ("busy", "no_box", "fail"):
+                self._take_extra(data)
                 self.state = state
                 return self.state
             elif state == "ok":
@@ -158,4 +216,18 @@ class RegisterRequest:
             self.rpy_deg = (float(rpy[0]), float(rpy[1]), float(rpy[2]))
         except (TypeError, ValueError):
             return False
+        self._take_extra(data)
         return True
+
+    def _take_extra(self, data: dict) -> None:
+        try:
+            self.gray = None if data.get("gray") is None else float(data["gray"])
+        except (TypeError, ValueError):
+            self.gray = None
+        out = []
+        for item in data.get("targets_xy_mm") or []:
+            try:
+                out.append((float(item[0]), float(item[1])))
+            except (TypeError, ValueError, IndexError):
+                pass
+        self.targets_xy_mm = out

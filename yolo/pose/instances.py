@@ -226,11 +226,49 @@ def collect_instances(
     return out
 
 
-def select_topmost(instances: list[InstanceCloud]) -> int | None:
+def _excluded(xyz: np.ndarray, exclude) -> bool:
+    """점군 가운데 (x, y) 가 제외 원 (x, y, r) 중 하나 안에 있으면 True."""
+    if not exclude:
+        return False
+    cx, cy = _center_xy(xyz)
+    return any((cx - x) ** 2 + (cy - y) ** 2 <= r * r for x, y, r in exclude)
+
+
+def _center_xy(xyz: np.ndarray) -> tuple[float, float]:
+    cx, cy = np.median(np.asarray(xyz, dtype=np.float64)[:, :2], axis=0)
+    return float(cx), float(cy)
+
+
+def ordered_targets(instances: list[InstanceCloud], *, exclude=None, region=None, nearest: bool = False):
+    """고를 수 있는 물체 [(번호, x, y)] 를 고르는 순서대로. 점이 로봇 베이스 mm 일 때 쓴다.
+
+    exclude=[(x, y, r)] 원 안은 빼고, region=((x0, x1), (y0, y1)) 이면 가운데가 그 안인 것만.
+    nearest 면 베이스 원점에서 가까운 순, 아니면 select_topmost 와 같은 높은 순.
+    """
+    out = []
+    for i, inst in enumerate(instances):
+        if not len(inst.xyz) or _excluded(inst.xyz, exclude):
+            continue
+        cx, cy = _center_xy(inst.xyz)
+        if region is not None:
+            (x0, x1), (y0, y1) = region
+            if not (x0 <= cx <= x1 and y0 <= cy <= y1):
+                continue
+        out.append((i, cx, cy))
+    if nearest:
+        out.sort(key=lambda t: t[1] ** 2 + t[2] ** 2)
+    else:
+        out.sort(key=lambda t: (instances[t[0]].height_score, len(instances[t[0]].xyz)), reverse=True)
+    return out
+
+
+def select_topmost(instances: list[InstanceCloud], exclude=None) -> int | None:
+    """가장 높은 물체. exclude=[(x, y, r)] 를 주면 가운데가 그 원 안인 물체는 빼고 고른다
+    (점이 로봇 베이스 mm 일 때만 뜻이 있다)."""
     scored = [
         (i, inst.height_score, len(inst.xyz))
         for i, inst in enumerate(instances)
-        if len(inst.xyz)
+        if len(inst.xyz) and not _excluded(inst.xyz, exclude)
     ]
     if not scored:
         return None

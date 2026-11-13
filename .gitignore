@@ -23,6 +23,7 @@ vision/calib_data/**
 vision/orbbec_filters.json
 # Per-board demo values students edit; update_board.sh must not reset them.
 launcher/demo_settings.json
+launcher/vision_pick_settings.json
 
 # Point clouds / local dumps
 **/*.ply

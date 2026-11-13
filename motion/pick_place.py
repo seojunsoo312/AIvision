@@ -234,7 +234,8 @@ class PickPlaceRunner:
             joints[GRIPPER_JOINT] = grip_100_to_user(float(step.grip_100))
             dur = self.ctrl.start_joint_goto(joints)
         elif step.kind == "joints":
-            dur = self.ctrl.start_joint_goto(dict(step.joints_deg or INIT_POSE_JOINTS_DEG))
+            # 쥐고 있으면 그리퍼는 지금 값 그대로 (이동 중에 열리지 않게).
+            dur = self.ctrl.start_joint_goto(self.ctrl.keep_gripper_if_holding(dict(step.joints_deg or INIT_POSE_JOINTS_DEG)))
         else:
             self._phase = "fault"
             self.status = f"알 수 없는 단계 {step.kind}"
@@ -360,6 +361,49 @@ def build_pick_place_steps(
         ]
     )
     return steps
+
+
+def build_pick_drop_steps(
+    *,
+    p_xyz_mm: np.ndarray,
+    p_rpy_deg: np.ndarray,
+    g_xyz_mm: np.ndarray,
+    g_rpy_deg: np.ndarray,
+    drop_xyz_mm: np.ndarray,
+    gripper_close_100: float = GRIPPER_CLOSE_100,
+    gripper_open_100: float = GRIPPER_OPEN_100,
+    pick_lift_mm: float = PICK_LIFT_MM,
+) -> list[PickPlaceStep]:
+    """집어서 바구니 위 drop_xyz 에서 그리퍼를 연다 (공중에서 떨어뜨림). 끝나면 초기자세.
+
+    집은 뒤 바로 위로 drop 높이까지 (적어도 pick_lift_mm) 올라가고, 초기자세를 거쳐 바구니 위로 간다.
+    손목은 놓을 때 TCP Rx ∥ 베이스 X (build_pick_place_steps 와 같음).
+    """
+    p_xyz = np.asarray(p_xyz_mm, dtype=float).reshape(3)
+    g_xyz = np.asarray(g_xyz_mm, dtype=float).reshape(3)
+    p_rpy = np.asarray(p_rpy_deg, dtype=float).reshape(3)
+    g_rpy = np.asarray(g_rpy_deg, dtype=float).reshape(3)
+    drop = np.asarray(drop_xyz_mm, dtype=float).reshape(3)
+    drop_rpy = rpy_tcp_rx_parallel_base_x(g_rpy)
+    z_lift = max(float(g_xyz[2]) + float(pick_lift_mm), float(drop[2]))
+    close_100 = float(np.clip(gripper_close_100, 0.0, 100.0))
+    open_100 = float(np.clip(gripper_open_100, 0.0, 100.0))
+    return [
+        PickPlaceStep(name="P", kind="ee", xyz_mm=p_xyz, rpy_deg=p_rpy),
+        PickPlaceStep(name="그리퍼 열기", kind="gripper", grip_100=open_100),
+        PickPlaceStep(name="G", kind="ee", xyz_mm=g_xyz, rpy_deg=g_rpy),
+        PickPlaceStep(name="그리퍼 닫기", kind="gripper", grip_100=close_100, hold=True),
+        PickPlaceStep(name="집기 리프트", kind="ee", xyz_mm=np.array([g_xyz[0], g_xyz[1], z_lift]), rpy_deg=g_rpy),
+        # 왼쪽 구역 → 오른쪽 바구니를 관절로 바로 가면 팔이 제 몸에 걸릴 수 있어 초기자세를 거친다.
+        PickPlaceStep(name="초기자세 거쳐 가기", kind="joints", joints_deg={k: float(v) for k, v in INIT_POSE_JOINTS_DEG.items()}),
+        PickPlaceStep(name="바구니 위", kind="ee_joints", xyz_mm=drop, rpy_deg=drop_rpy),
+        PickPlaceStep(name="떨어뜨리기", kind="gripper", grip_100=open_100, hold=False),
+        PickPlaceStep(
+            name="초기자세",
+            kind="joints",
+            joints_deg={k: float(v) for k, v in INIT_POSE_JOINTS_DEG.items()},
+        ),
+    ]
 
 
 def _step_text(step: PickPlaceStep) -> str:

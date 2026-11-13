@@ -53,8 +53,8 @@ from vision.depth_cloud import (
     write_ply,
 )
 from yolo.pose.debug.local_plane import SLICE_MM, local_pose
-from yolo.pose.instances import collect_instances, depth_blob_boxes, select_topmost
-from motion.register_link import read_request, write_status
+from yolo.pose.instances import collect_instances, depth_blob_boxes, ordered_targets, select_topmost
+from motion.register_link import read_request, read_request_options, write_status
 from motion import runlog  # noqa: E402
 
 import cv2  # noqa: E402
@@ -488,6 +488,7 @@ def main() -> None:
     # YOLO 자세는 프레임마다 흔들린다. 같은 새 자세가 이만큼 이어져야 바뀐 것으로 본다.
     class_streak = 0
     pending_req_id: str | None = None
+    pending_req_extra: dict = {}
     seen_req_id = read_request()
     if args.cad:
         print("CAD 로드 중...")
@@ -667,7 +668,7 @@ def main() -> None:
                         if nxt.get("aligned_ok", False) and T_bc is not None:
                             xyz_ui, rpy_ui, _body_ui = _place_ui_xyzrpy(nxt["T"])
                             write_status(
-                                pending_req_id, "ok", xyz=xyz_ui, rpy=rpy_ui
+                                pending_req_id, "ok", xyz=xyz_ui, rpy=rpy_ui, extra=pending_req_extra
                             )
                         else:
                             write_status(pending_req_id, "fail")
@@ -847,6 +848,29 @@ def main() -> None:
             if incoming and incoming != seen_req_id:
                 seen_req_id = incoming
                 req_id = incoming
+            req_T_prev = None if cad_pose is None else cad_pose["T"]
+            req_extra: dict = {}
+            if req_id is not None and T_bc is not None:
+                opts = read_request_options()
+                if opts.active:
+                    # 요청의 조건 (제외 원 · 구역 · 가까운 순) 으로 다시 고른다.
+                    # 고른 물체가 바뀌면 지금 추적 중인 자세는 쓰지 않는다.
+                    order = ordered_targets(
+                        instances, exclude=opts.exclude, region=opts.region, nearest=opts.nearest
+                    )
+                    picked = order[0][0] if order else None
+                    if picked != chosen:
+                        req_T_prev = None
+                    chosen = picked
+                    req_extra["targets_xy_mm"] = [[round(x, 1), round(y, 1)] for _, x, y in order]
+                    if chosen is None:
+                        last_xyz = np.zeros((0, 3), dtype=np.float32)
+                        cad_class_id = None
+                    else:
+                        last_xyz, last_rgb = instances[chosen].xyz, instances[chosen].rgb
+                        cad_class_id = instances[chosen].class_id
+                        # 흰 · 검 판정용 밝기 (점 색의 채널 평균, 중앙값).
+                        req_extra["gray"] = round(float(np.median(np.asarray(last_rgb, dtype=np.float64).mean(axis=1))), 1)
             if req_id is not None and cad_worker is None:
                 write_status(req_id, "fail")
             elif (key == ord("c") and cad_worker is not None) or req_id is not None:
@@ -856,7 +880,7 @@ def main() -> None:
                     else:
                         print("이미 등록 중입니다.")
                 elif req_id is not None and chosen is None:
-                    write_status(req_id, "no_box")
+                    write_status(req_id, "no_box", extra=req_extra)
                 elif len(last_xyz) < 20:
                     if req_id is not None:
                         write_status(req_id, "fail")
@@ -865,7 +889,7 @@ def main() -> None:
                 elif not cad_worker.submit(
                     last_xyz,
                     T_init=None,
-                    T_prev=None if cad_pose is None else cad_pose["T"],
+                    T_prev=req_T_prev,
                     desk_plane=_work_desk_plane(plane, T_bc),
                     class_id=cad_class_id,
                 ):
@@ -881,6 +905,7 @@ def main() -> None:
                     last_full_class = cad_class_id
                     if req_id is not None:
                         pending_req_id = req_id
+                        pending_req_extra = req_extra
                         write_status(req_id, "run")
                     print("CAD 처음부터 다시 등록")
             if key == ord("v"):
