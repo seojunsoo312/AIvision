@@ -2,7 +2,7 @@
 """학습한 자세 3클래스 가중치로 Orbbec 실시간 인식.
 
   python yolo/train/detect.py
-  python yolo/train/detect.py --weights yolo/weights/best.pt --conf 0.35
+  python yolo/train/detect.py --weights yolo/weights/box_best.pt --conf 0.35
 
 GPU 설치 확인만 하려면 COCO nano 를 잠깐 쓸 수 있다 (우리 물건은 안 잡힘):
 
@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from yolo.config import (
-    BEST_PT,
+    box_best_pt,
     DETECT_CONF,
     POSE_CLASSES,
     add_class_argument,
@@ -60,7 +60,7 @@ def main() -> None:
         weights = default_start_pt()
         print("사전학습 COCO. 우리 클래스는 여기 없다. GPU·카메라 확인용.")
     else:
-        weights = args.weights if args.weights is not None else BEST_PT
+        weights = args.weights if args.weights is not None else box_best_pt()
         if not Path(weights).exists():
             raise SystemExit(
                 f"가중치 없음: {weights}\n"

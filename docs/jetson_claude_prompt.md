@@ -11,7 +11,7 @@ Jetson에 Claude Code를 깔았으면, `~/AIvision`에서 `claude`를 실행하�
 지금까지 한 것:
 - git clone (폴더 이름 ~/AIvision), git pull 로 최신까지 받음
 - conda 환경 AIvision (Python 3.10) 설치. docs/jetson_setup.md 5단계대로 pip 로 설치함
-- ~/AIvision/yolo/weights/best.pt 복사함
+- ~/AIvision/yolo/weights/box_best.pt 복사함
 
 할 일:
 
@@ -45,7 +45,7 @@ from vision.rgbd import OrbbecV1
 cam=OrbbecV1(); fr=[cam.grab() for _ in range(15)]; cam.close()
 ok=[f for f in fr if f[0] is not None]; print('frames', len(ok), ok[-1][0].shape, ok[-1][1].shape)
 from ultralytics import YOLO
-r=YOLO('yolo/weights/best.pt').predict(ok[-1][0], device=0, verbose=False); print('yolo', r[0].boxes.data.device)"
+r=YOLO('yolo/weights/box_best.pt').predict(ok[-1][0], device=0, verbose=False); print('yolo', r[0].boxes.data.device)"
      → 컬러 (480,640,3), 뎁스 (480,640), yolo 가 cuda:0 이면 정상.
      실행한 폴더에 Log/ 폴더가 새로 생기지 않아야 한다.
    - 펜던트 한글 글꼴: cd ~/AIvision/pendant && python -c "import ui_style; print(ui_style.enable_xft_tk())" → True

@@ -71,5 +71,5 @@ Meshcat 오른쪽 위 Scene 패널에서 Background(배경색)는 꺼 둔 상태
 
 - 3D 화면은 `motion/visualizer.py`, 팔 설계도와 부품 STL은 `motion/robot/`입니다.
 - 실기 Connect는 이 PC에서 `lerobot-calibrate`로 만든 팔로워 캘리브를 읽습니다. 그 JSON은 이 폴더에 없습니다.
-- 물건 인식은 `yolo/pose/roi_cloud.py`입니다. 물건 위치 칸은 그 결과를 받아 옵니다.
+- 물건 인식은 `yolo/pose/roi_cloud.py`입니다. 물건 위치 칸은 그 결과를 받아 옵니다. 카메라 창의 자세 방식 (CAD 정합 / 키포인트, `docs/yolo.md`) 중 지금 고른 쪽의 자세가 옵니다.
 - 패키지 목록은 `docs/requirements.txt`, 설계 메모는 `docs/pendant_spec.md`입니다.

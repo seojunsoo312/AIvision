@@ -5271,14 +5271,17 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text x="688" y="38.5" class="t-muted" font-size="8" font-weight="600" text-anchor="middle" letter-spacing=".04em">② 집어서 옮기기</text>
 
         <!-- Workflow groups -->
+        <text x="378" y="196" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">6D 자세: 둘 중 하나 (k 로 고르기)</text>
 
 
         <!-- Edge paths -->
         <path data-edge-from="see" data-edge-to="lost" data-edge-label="못 찾음" data-edge-key="0" data-edge-id="e-lost" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="228,269;228,465" d="M 228 269 L 228 465" class="a-security" data-animate="edge" style="--step:6" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="pick" data-edge-to="stop" data-edge-label="문제" data-edge-key="1" data-edge-id="e-stop" data-composition-routing="workflow-v2-auto" data-edge-role="error" data-composition-points="748,393;748,465" d="M 748 393 L 748 465" class="a-security" data-animate="edge" style="--step:7" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="load" data-edge-to="see" data-edge-key="2" data-edge-id="e1" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="168,119;228,119;228,217" d="M 168 119 L 220 119 Q 228 119 228 127 L 228 217" class="a-default" data-animate="edge" style="--step:0" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="see" data-edge-to="calc" data-edge-label="찾음" data-edge-key="3" data-edge-id="e2" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="288,243;326,243" d="M 288 243 L 326 243" class="a-default" data-animate="edge" style="--step:1" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="calc" data-edge-to="show" data-edge-key="4" data-edge-id="e3" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="430,243;462,243" d="M 430 243 L 462 243" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="see" data-edge-to="calc_cad" data-edge-key="3" data-edge-id="e2" data-composition-points="288,243;306,243;306,219;326,219" d="M 288 243 L 306 243 L 306 225 Q 306 219 312 219 L 326 219" class="a-default" data-animate="edge" style="--step:1" stroke-width="1.4" fill="none" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="see" data-edge-to="calc_kpt" data-edge-key="3b" data-edge-id="e2b" data-composition-points="288,243;306,243;306,259;326,259" d="M 288 243 L 306 243 L 306 253 Q 306 259 312 259 L 326 259" class="a-default" data-animate="edge" style="--step:1" stroke-width="1.4" fill="none" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="calc_cad" data-edge-to="show" data-edge-key="4" data-edge-id="e3" data-composition-points="430,219;446,219;446,243;462,243" d="M 430 219 L 440 219 Q 446 219 446 225 L 446 243 L 462 243" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.4" fill="none" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="calc_kpt" data-edge-to="show" data-edge-key="4b" data-edge-id="e3b" data-composition-points="430,259;446,259;446,243" d="M 430 259 L 440 259 Q 446 259 446 253 L 446 243" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.4" fill="none"/>
         <path data-edge-from="show" data-edge-to="go" data-edge-label="확인" data-edge-key="5" data-edge-id="e4" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="508,217;508,119;582,119" d="M 508 217 L 508 127 Q 508 119 516 119 L 582 119" class="a-default" data-animate="edge" style="--step:3" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="go" data-edge-to="pick" data-edge-key="6" data-edge-id="e5" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="628,145;628,367;702,367" d="M 628 145 L 628 359 Q 628 367 636 367 L 702 367" class="a-emphasis" data-animate="edge" style="--step:4" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
@@ -5318,15 +5321,20 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="228" y="263.1" class="t-muted" font-size="8" text-anchor="middle">AI(YOLO)</text>
         </g>
 
-        <g id="node-calc" data-node-id="calc" data-node-label="위치 · 각도 계산" tabindex="0" role="button" aria-label="위치 · 각도 계산 포커스, 물체 모양과 비교, 컴퓨터 › ① 물체 찾기" aria-pressed="false" data-node-kind="backend" data-node-sublabel="물체 모양과 비교" data-node-context="컴퓨터 › ① 물체 찾기">
-          <title>위치 · 각도 계산 · 물체 모양과 비교 · 컴퓨터 › ① 물체 찾기</title>
-          <rect x="326" y="217" width="104" height="52" rx="8" class="c-mask"/>
-          <rect x="326" y="217" width="104" height="52" rx="8" class="c-backend" data-animate="node" style="--step:2" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(332 223) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="378" y="248" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">위치 · 각도 계산</text>
-          <text data-detail="context" x="378" y="262.6" class="t-muted" font-size="8" text-anchor="middle">물체 모양과 비교</text>
+        <g id="node-calc_cad" data-node-id="calc_cad" data-node-label="① CAD 정합" tabindex="0" role="button" aria-label="① CAD 정합 포커스, 깊이 점 + 물체 모양, 컴퓨터 › ① 물체 찾기" aria-pressed="false" data-node-kind="backend" data-node-sublabel="깊이 점 + 물체 모양" data-node-context="컴퓨터 › ① 물체 찾기">
+          <title>① CAD 정합 · 깊이 점 + 물체 모양 · 컴퓨터 › ① 물체 찾기</title>
+          <rect x="326" y="202" width="104" height="34" rx="8" class="c-mask"/>
+          <rect x="326" y="202" width="104" height="34" rx="8" class="c-backend" data-animate="node" style="--step:2" stroke-width="1.5"/>
+          <text data-node-label="" data-detail-anchor="" x="378" y="217" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">① CAD 정합</text>
+          <text data-detail="context" x="378" y="229" class="t-muted" font-size="8" text-anchor="middle">깊이 점 + 물체 모양</text>
+        </g>
+
+        <g id="node-calc_kpt" data-node-id="calc_kpt" data-node-label="② 키포인트" tabindex="0" role="button" aria-label="② 키포인트 포커스, 컬러 사진 점 10개, 컴퓨터 › ① 물체 찾기" aria-pressed="false" data-node-kind="backend" data-node-sublabel="컬러 사진 점 10개" data-node-context="컴퓨터 › ① 물체 찾기">
+          <title>② 키포인트 · 컬러 사진 점 10개 · 컴퓨터 › ① 물체 찾기</title>
+          <rect x="326" y="242" width="104" height="34" rx="8" class="c-mask"/>
+          <rect x="326" y="242" width="104" height="34" rx="8" class="c-backend" data-animate="node" style="--step:2" stroke-width="1.5"/>
+          <text data-node-label="" data-detail-anchor="" x="378" y="257" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">② 키포인트</text>
+          <text data-detail="context" x="378" y="269" class="t-muted" font-size="8" text-anchor="middle">컬러 사진 점 10개</text>
         </g>
 
         <g id="node-show" data-node-id="show" data-node-label="화면에 표시" tabindex="0" role="button" aria-label="화면에 표시 포커스, 3D 화면 · 숫자 칸, 컴퓨터 › ① 물체 찾기" aria-pressed="false" data-node-kind="backend" data-node-sublabel="3D 화면 · 숫자 칸" data-node-context="컴퓨터 › ① 물체 찾기">
@@ -5388,10 +5396,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text x="748" y="429" class="t-edge-security" font-size="8" text-anchor="middle">문제</text>
         </g>
 
-        <g data-detail="context" data-edge-from="see" data-edge-to="calc" data-edge-label="찾음" data-edge-key="3" data-edge-id="e2">
-          <rect x="292" y="223" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="307" y="233" class="t-muted" font-size="8" text-anchor="middle">찾음</text>
-        </g>
+        
 
         <g data-detail="context" data-edge-from="show" data-edge-to="go" data-edge-label="확인" data-edge-key="5" data-edge-id="e4">
           <rect x="530" y="99" width="30" height="14" rx="3" class="c-mask"/>
@@ -5602,7 +5607,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>시작 전에</h3>
         </div>
         <ul>
-          <li>카메라 창을 먼저 켜 둡니다.</li>
+          <li>카메라 창을 먼저 켜 둡니다. 위치 계산 방식(CAD 정합 / 키포인트)은 카메라 창에서 k 로 고릅니다. 펜던트에는 지금 고른 방식의 위치가 옵니다.</li>
+          <li>브라켓은 책상 위에, 서로 3cm 이상 떨어뜨려 놓습니다. 쌓거나 기대 놓으면 위치가 틀립니다.</li>
           <li>펜던트는 --grasp 로 켜고, 실제 팔이면 Connect 를 누릅니다.</li>
           <li>불러오기 전에 팔을 초기자세로 치워 둡니다. 카메라가 그리퍼 끝을 물체로 잘못 볼 수 있습니다.</li>
           <li>놓을 위치는 펜던트의 「놓기 x / y」 칸에서 바꿀 수 있고, 3D 화면 바닥에 빨간 원으로 보입니다.</li>

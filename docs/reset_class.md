@@ -25,13 +25,15 @@ python reset_class.py --all -y    # 물어보지 않고 바로 삭제
 | --------------------------------------------- | ----------------------- |
 | `yolo/datasets/raw/images/`                   | 찍은 사진                   |
 | `yolo/datasets/raw/labels/`                   | 박스 라벨                   |
+| `yolo/datasets/raw/kpt_labels/`               | 키포인트 라벨                 |
 | `yolo/datasets/splits/`                       | 학습/검증 목록                |
 | `yolo/datasets/custom/`                       | 예전 학습용 폴더               |
 | `yolo/runs/`                                  | 학습 그래프, 저장한 점군, 등록 JSON |
-| `yolo/weights/best.pt`                        | 우리가 학습한 가중치             |
+| `yolo/weights/box_best.pt`                    | 우리가 학습한 박스 가중치         |
+| `yolo/weights/kpt_best.pt`                    | 우리가 학습한 키포인트 가중치      |
 
 
-학습에 필요한 코드, CAD, 시작 가중치 `yolo11n.pt`(있으면)는 남습니다.
+학습에 필요한 코드, CAD, 시작 가중치 `yolo11n.pt`(있으면)는 남습니다. 박스 기본 모델 (`yolo/weights/box_base.pt`) 과 박스 섞음 세트 (`yolo/datasets/box_base/`), 기본 키포인트 가중치 (`vision/sim/out/pose_runs/`), 기본 섞음 세트 (`yolo/datasets/kpt_base/`), 키포인트 라벨 연습 사진 (`yolo/datasets/seat/` 등) 도 지우지 않습니다.
 
 
 

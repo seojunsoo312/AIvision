@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """YOLO ROI → 인스턴스 점군 → 최상단 → (선택) CAD 등록.
 
-V4L2 컬러만으로는 안 된다. Orbbec SDK(D2C) + 학습한 best.pt.
+V4L2 컬러만으로는 안 된다. Orbbec SDK(D2C) + 학습한 박스 모델 box_best.pt.
 펜던트·Viewer·detect.py 와 동시에 켜지 말 것.
 
-  python yolo/pose/roi_cloud.py
-  v=3D  c=지금 등록  s=PLY  r=평면  q=종료
+  python yolo/pose/roi_cloud.py                     # 자세 = CAD 정합 (기본)
+  python yolo/pose/roi_cloud.py --pose kpt          # 자세 = 키포인트 (컬러만)
+  python yolo/pose/roi_cloud.py --replay vision/sim/out/scenes   # 카메라 대신 저장한 장면 (n / p 넘기기)
+  v=3D (브라켓 전부, CAD 는 맨 위 빨강 · 나머지 진하거나 연한 빨강)  c=지금 등록  s=PLY · 장면 저장  r=평면  q=종료
+  k=자세 방식 바꾸기 (CAD 정합 ↔ 키포인트)  i=검사 (흰/검 · 양/불, 화면 멈춤. 아무 키나 → 다시)
   별도 창: NoiseRemoval / HoleFilter / HoleFilling / Color / DepthExp / Temporal
+
+자세 방식만 다르고 뒷부분 (검사 · 펜던트 「물체 위치 불러오기」) 은 같다. 펜던트에는 지금 고른 방식의 자세가 간다.
 """
 
 from __future__ import annotations
@@ -28,14 +33,15 @@ quiet_gtk()
 from vision.calib import intrinsics_for_rotate180, load_K, load_T_base_cam
 from vision.camera import FRAME_HEIGHT, FRAME_WIDTH, ROTATE_180
 from vision.text import put_text
-from vision.transforms import invert_T, plane_tilt_from_z_deg, transform_plane
+from vision.transforms import apply_T, invert_T, plane_tilt_from_z_deg, transform_plane
 from vision.orbbec_filters import (
     NOISE_MAX_SIZE_DEFAULT,
     NOISE_MIN_DIFF_DEFAULT,
     OrbbecFilterPanel,
 )
 from yolo.config import (
-    BEST_PT,
+    box_best_pt,
+    KPT_BEST_PT,
     CLASS_NAME,
     DETECT_CONF,
     RUNS_DIR,
@@ -54,7 +60,20 @@ from vision.depth_cloud import (
 )
 from yolo.pose.debug.local_plane import SLICE_MM, local_pose
 from yolo.pose.instances import collect_instances, depth_blob_boxes, ordered_targets, select_topmost
-from motion.register_link import read_request, read_request_options, write_status
+from yolo.pose.pose_methods import (
+    METHOD_KO,
+    POSE_METHODS,
+    KptWorker,
+    ReplaySource,
+    draw_judged,
+    judge_all,
+    kpt_camera,
+    pick_target,
+    print_judged,
+    refine_pose,
+    save_scene,
+)
+from motion.register_link import read_request, read_request_full, read_request_options, write_status
 from motion import runlog  # noqa: E402
 
 import cv2  # noqa: E402
@@ -170,6 +189,98 @@ def _device() -> str | int:
     import torch
 
     return 0 if torch.cuda.is_available() else "cpu"
+
+
+class _CadOthers:
+    """맨 위 하나 (펜던트 집기용, _CadWorker) 말고 나머지 브라켓도 CAD 정합한다. 화면 · 검사용.
+
+    한 번에 브라켓 목록을 받아 차례로 맞춘다. 지난번 자리에서 move_mm 안이면 다시 계산하지 않고,
+    reset_mm 안이면 지난 자세에서 ICP 만 (추적), 그보다 멀거나 새 브라켓이면 처음부터 등록한다.
+    실패한 자리도 기억해서, 그 브라켓이 move_mm 넘게 움직이기 전까지는 다시 해 보지 않는다.
+    """
+
+    def __init__(self, *, voxel_mm: float, flip: bool, tries: int, camera_origin, method: str,
+                 move_mm: float, reset_mm: float):
+        from yolo.pose.register import register_pose
+
+        self._register_pose = register_pose
+        self.kw = dict(voxel_mm=voxel_mm, flip=flip, tries=tries, camera_origin=camera_origin, method=method)
+        self.move_mm = float(move_mm)
+        self.reset_mm = float(reset_mm)
+        self._lock = threading.Lock()
+        self._job: list | None = None
+        self._desk = None
+        self._cache: list[dict] = []  # 지난번 결과 {"anchor", "T" (실패면 None), "class_id"}
+        self.result: list[dict] | None = None
+        self.busy = False
+        self._stop = False
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def submit(self, clouds: list[tuple[np.ndarray, int | None]], desk_plane) -> bool:
+        """clouds: 브라켓마다 (점군 베이스 mm, YOLO 자세 클래스 또는 None)."""
+        with self._lock:
+            if self.busy:
+                return False
+            self._job = [(np.asarray(x, dtype=np.float64).copy(), c) for x, c in clouds]
+            self._desk = None if desk_plane is None else np.asarray(desk_plane, dtype=np.float64).copy()
+            self.busy = True
+        return True
+
+    def _one(self, xyz: np.ndarray, class_id, desk) -> dict:
+        anchor = _median_xyz(xyz)
+        prev = None
+        if self._cache:
+            d = [float(np.linalg.norm(anchor - c["anchor"])) for c in self._cache]
+            j = int(np.argmin(d))
+            if d[j] < self.move_mm:
+                return dict(self._cache[j])  # 그대로 있음 (성공이든 실패든)
+            if d[j] < self.reset_mm and self._cache[j]["T"] is not None:
+                prev = self._cache[j]
+        try:
+            pose = self._register_pose(
+                xyz,
+                T_base_cam=None,
+                T_init=None if prev is None else prev["T"],
+                T_prev=None if prev is None else prev["T"],
+                desk_plane=desk,
+                class_id=class_id if prev is None else None,
+                **self.kw,
+            )
+        except Exception as exc:
+            print(f"CAD 정합 실패 (다른 브라켓): {exc}")
+            pose = None
+        if pose is None or not pose.get("aligned_ok", False):
+            return {"anchor": anchor, "T": None, "class_id": None}
+        return {"anchor": anchor, "T": np.asarray(pose["T"], dtype=np.float64), "class_id": pose.get("class_id")}
+
+    def _loop(self) -> None:
+        while not self._stop:
+            with self._lock:
+                job, desk = self._job, self._desk
+                self._job = None
+            if job is None:
+                time.sleep(0.03)
+                continue
+            done = []
+            for xyz, cid in job:
+                if self._stop:
+                    break
+                done.append(self._one(xyz, cid, desk))
+            self._cache = done
+            with self._lock:
+                self.result = [r for r in done if r["T"] is not None]
+                self.busy = False
+
+    def take_result(self) -> list[dict] | None:
+        with self._lock:
+            res = self.result
+            self.result = None
+        return res
+
+    def close(self) -> None:
+        self._stop = True
+        self._thread.join(timeout=10.0)
 
 
 class _CadWorker:
@@ -355,9 +466,79 @@ _OVERLAY_VOXEL_MM = 0.5
 _CLASS_CHANGE_FRAMES = 10
 _OUTLIER_STD = 1.5
 _OUTLIER_NB = 20
+# v 키 Open3D 미리보기의 CAD 점 색 (RGB). 맨 위 브라켓은 기본 빨강, 나머지는 같은 빨강 계열의
+# 진하고 연한 색을 차례로 쓴다 (몇 번째 브라켓인지 구분만 되게).
+_TOP_CAD_RGB = (220, 40, 40)
+_OTHER_CAD_RGBS = (
+    (140, 15, 15),
+    (255, 130, 130),
+    (180, 25, 25),
+    (255, 90, 90),
+    (105, 10, 10),
+    (240, 170, 170),
+)
+
+
+def _preview_cloud(instances, cad_pose, others_poses, cad_xyz) -> tuple[np.ndarray, np.ndarray]:
+    """v 키 미리보기 점군: 보이는 브라켓 점군 전부 + 정합된 CAD 점 (맨 위 하나 + 나머지).
+
+    instances 의 점군과 자세 T 는 같은 좌표계 (캘리브가 있으면 베이스 mm) 여야 한다.
+    cad_xyz 가 None 이면 CAD 는 겹치지 않는다. 정합에 실패한 브라켓은 점군만 나온다.
+    """
+    xyz_parts: list[np.ndarray] = []
+    rgb_parts: list[np.ndarray] = []
+    for inst in instances:
+        if len(inst.xyz) == 0:
+            continue
+        rgb = inst.rgb
+        if rgb is None or len(rgb) != len(inst.xyz):
+            rgb = np.full((len(inst.xyz), 3), 180, dtype=np.uint8)
+        xyz_parts.append(np.asarray(inst.xyz, dtype=np.float32))
+        rgb_parts.append(np.asarray(rgb, dtype=np.uint8))
+    if cad_xyz is not None:
+        cads = []
+        if cad_pose is not None:
+            cads.append((cad_pose["T"], _TOP_CAD_RGB))
+        for j, op in enumerate(others_poses or []):
+            cads.append((op["T"], _OTHER_CAD_RGBS[j % len(_OTHER_CAD_RGBS)]))
+        for T, color in cads:
+            aligned = apply_T(np.asarray(cad_xyz, dtype=np.float64), np.asarray(T, dtype=np.float64))
+            xyz_parts.append(aligned.astype(np.float32))
+            rgb_parts.append(np.tile(np.array([color], dtype=np.uint8), (len(aligned), 1)))
+    if not xyz_parts:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
+    return np.vstack(xyz_parts), np.vstack(rgb_parts)
 
 
 _log = runlog.get("camera")
+
+
+def _cad_outline(T_base: np.ndarray, kcam, w: int, h: int) -> list | None:
+    """CAD 자세 → 화면 윤곽 (키포인트 방식과 같은 그림)."""
+    from yolo.train import kpt_label as KL
+
+    T_cam = invert_T(kcam.T_base_cam) @ np.asarray(T_base, dtype=np.float64)
+    rvec, _ = cv2.Rodrigues(T_cam[:3, :3])
+    v, f = KL.mesh_mm()
+    pv = cv2.projectPoints(v, rvec, T_cam[:3, 3], kcam.K, kcam.dist)[0].reshape(-1, 2)
+    x0, y0 = np.clip(pv.min(axis=0), 0, [w, h])
+    x1, y1 = np.clip(pv.max(axis=0), 0, [w, h])
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    # 삼각형을 다 칠한 마스크의 테두리 (4배 해상도로 부드럽게)
+    sc = 4.0
+    ox, oy = int(x0) - 2, int(y0) - 2
+    mask = np.zeros((int((y1 - oy + 4) * sc), int((x1 - ox + 4) * sc)), np.uint8)
+    cv2.fillPoly(mask, list(((pv[f] - [ox, oy]) * sc).astype(np.int32)), 255)
+    cs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return [c.reshape(-1, 2) / sc + [ox, oy] for c in cs]
+
+
+class _NoFilters:
+    """리플레이 때 Orbbec 필터 창 대신."""
+
+    def sync(self, *, force: bool = False) -> None:
+        pass
 
 
 def main() -> None:
@@ -428,14 +609,46 @@ def main() -> None:
         action="store_true",
         help="Orbbec NoiseRemovalFilter 끄기. 기본은 켜짐",
     )
+    parser.add_argument(
+        "--pose",
+        choices=POSE_METHODS,
+        default="cad",
+        help="자세 방식. cad=뎁스 점군 + CAD 정합 (기본), kpt=키포인트 (컬러만). 창에서 k 로 바꾼다",
+    )
+    parser.add_argument(
+        "--kpt-weights",
+        type=Path,
+        default=None,
+        help="키포인트 모델. 기본: 학생이 학습한 yolo/weights/kpt_best.pt (없으면 키포인트 방식을 못 쓴다)",
+    )
+    parser.add_argument(
+        "--replay",
+        type=Path,
+        default=None,
+        help="카메라 대신 장면 폴더 (rgb.png · depth_mm.npy · camera.json). n / p 로 넘긴다",
+    )
+    parser.add_argument(
+        "--replay-noise",
+        action="store_true",
+        help="리플레이 뎁스에 실물 같은 노이즈를 넣는다 (시뮬 장면용)",
+    )
     args = parser.parse_args()
 
-    rotate = ROTATE_180
-    weights = args.weights if args.weights is not None else BEST_PT
+    replay = None if args.replay is None else ReplaySource(args.replay, noise=args.replay_noise)
+    rotate = ROTATE_180 and replay is None
+    weights = args.weights if args.weights is not None else box_best_pt()
     if not Path(weights).exists():
-        raise SystemExit(f"가중치 없음: {weights}\npython yolo/train/train.py")
+        # 수업 흐름에 맞춰 학생이 학습한 모델로만 켠다 (기본 모델로 대신 켜지 않는다)
+        raise SystemExit(
+            f"박스 모델이 없습니다: {weights}\n"
+            "5차시 박스 학습 (python yolo/train/train.py) 뒤에 켜집니다."
+        )
 
-    K, k_path = load_K()
+    if replay is not None:
+        K, T_replay = replay.camera()
+        k_path = args.replay / "camera.json"
+    else:
+        K, k_path = load_K()
     if rotate:
         K, _ = intrinsics_for_rotate180(K, None, FRAME_WIDTH, FRAME_HEIGHT)
         print(
@@ -450,7 +663,10 @@ def main() -> None:
     T_bc = None
     frame_name = "camera_mm"
     if args.base:
-        T_bc, t_path = load_T_base_cam()
+        if replay is not None:
+            T_bc, t_path = T_replay, k_path
+        else:
+            T_bc, t_path = load_T_base_cam()
         frame_name = "base_mm"
         print(f"T_base_cam {t_path}")
         _log.info("손눈 캘리브 %s", t_path)
@@ -479,6 +695,9 @@ def main() -> None:
     cad_pose = None
     viewer_process = None
     cad_worker = None
+    cad_others = None  # 맨 위 말고 나머지 브라켓 CAD 정합
+    others_poses: list[dict] = []
+    last_others_t = 0.0
     last_cad_t = 0.0
     last_cad_anchor = None
     cad_full_done = False
@@ -507,6 +726,15 @@ def main() -> None:
             grasp_rpy_deg=grasp_rpy_deg,
             frame_name=frame_name,
             method=args.register,
+        )
+        cad_others = _CadOthers(
+            voxel_mm=_VOXEL_MM,
+            flip=bool(args.base),
+            tries=4,
+            camera_origin=None if T_bc is None else T_bc[:3, 3],
+            method=args.register,
+            move_mm=args.cad_move_mm,
+            reset_mm=args.cad_reset_mm,
         )
         if args.base:
             print(
@@ -538,19 +766,83 @@ def main() -> None:
         grasp_xyz_mm = np.zeros(3, dtype=np.float64)
         grasp_rpy_deg = np.zeros(3, dtype=np.float64)
 
-    cam = open_orbbec(
-        noise_filter=not args.no_noise_filter,
-        noise_min_diff=noise_min_diff,
-        noise_max_size=noise_max_size,
-        hole_filter=True,
-    )
+    # 키포인트 방식도 카메라보다 먼저 로드한다 (스트림 중 긴 로드는 USB 단절을 부른다). 손눈이 있어야 쓴다.
+    method = args.pose
+    kpt_worker = None
+    kcam = None
+    kpt_poses: list[dict] = []
+    kpt_target: int | None = None
+    # 키포인트도 학생이 학습한 모델로만 쓴다 (기본 모델로 대신 켜지 않는다). 다른 모델은 --kpt-weights 로.
+    kpt_weights = args.kpt_weights if args.kpt_weights is not None else KPT_BEST_PT
+    kpt_why = ""  # 키포인트 방식을 못 쓰는 이유 (k 를 눌렀을 때 안내)
+    if T_bc is None:
+        kpt_why = "손눈 캘리브가 없습니다 (4차시)."
+    elif not Path(kpt_weights).is_file():
+        kpt_why = (
+            f"키포인트 모델이 없습니다: {kpt_weights}\n"
+            "6차시 키포인트 학습 (python yolo/train/kpt_train.py) 뒤에 쓸 수 있습니다."
+        )
+    else:
+        kcam = kpt_camera(K, T_bc, dist=np.zeros(5) if replay is not None else None)
+        try:
+            print("키포인트 모델 로드 중...")
+            kpt_worker = KptWorker(kcam, kpt_weights)
+            print(f"키포인트 {kpt_worker.weights}")
+        except (FileNotFoundError, OSError) as exc:
+            kpt_why = f"키포인트 모델을 불러오지 못했습니다: {exc}"
+    if kpt_why:
+        print(f"키포인트 방식을 쓸 수 없습니다. {kpt_why}")
+    if method == "kpt" and kpt_worker is None:
+        raise SystemExit(f"--pose kpt 를 켤 수 없습니다. {kpt_why}")
+    print(f"자세 방식: {METHOD_KO[method]}  (k 로 바꾸기, i 검사)")
+
+    if replay is not None:
+        cam = replay
+        print(f"리플레이 {args.replay}  장면 {len(replay.scenes)}개  (n / p 넘기기)")
+    else:
+        cam = open_orbbec(
+            noise_filter=not args.no_noise_filter,
+            noise_min_diff=noise_min_diff,
+            noise_max_size=noise_max_size,
+            hole_filter=True,
+        )
     cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
-    filters = OrbbecFilterPanel(
-        cam,
-        noise_on=not args.no_noise_filter,
-        min_diff=noise_min_diff,
-        max_size=noise_max_size,
-    )
+    if replay is not None:
+        filters = _NoFilters()
+    else:
+        filters = OrbbecFilterPanel(
+            cam,
+            noise_on=not args.no_noise_filter,
+            min_diff=noise_min_diff,
+            max_size=noise_max_size,
+        )
+
+    def current_poses() -> list[np.ndarray]:
+        """지금 방식으로 구한 브라켓 자세들 (베이스 mm). CAD 정합은 맨 위 하나 + 나머지."""
+        if method == "kpt":
+            return [kp["T"] for kp in kpt_poses]
+        poses = [op["T"] for op in others_poses]
+        if cad_pose is not None and cad_pose.get("aligned_ok", False):
+            poses = [cad_pose["T"]] + poses
+        return poses
+
+    def objects_for_request(bgr: np.ndarray, poses: list[np.ndarray]) -> list[dict]:
+        """자세들 → 검사 (테두리 맞춤 · 흰/검 · 양/불) → 펜던트 숫자 목록. 브라켓 아님은 빼고, 로봇에서 가까운 순."""
+        out = []
+        for r in judge_all(bgr, poses, kcam):
+            if r["verdict"] == "브라켓 아님":
+                continue
+            xyz_ui, rpy_ui, _body = _place_ui_xyzrpy(r["T_base"])
+            out.append({
+                "xyz_mm": [round(float(v), 2) for v in xyz_ui],
+                "rpy_deg": [round(float(v), 2) for v in rpy_ui],
+                "pose": r["pose"],
+                "color": "흰" if r["white"] else "검",
+                "verdict": r["verdict"],
+            })
+        out.sort(key=lambda o: float(np.hypot(o["xyz_mm"][0], o["xyz_mm"][1])))
+        _log.info("브라켓 목록 보냄  %s", [(o["verdict"], o["xyz_mm"][:2]) for o in out])
+        return out
 
     try:
         while True:
@@ -569,6 +861,7 @@ def main() -> None:
             if depth.shape[:2] != bgr.shape[:2]:
                 depth = cv2.resize(depth, (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
 
+            raw = bgr.copy()  # 그리기 전 영상 (키포인트 · 검사 · 저장용)
             h, w = bgr.shape[:2]
             if not args.no_plane and refit_plane:
                 full = np.ones((h, w), dtype=bool)
@@ -637,6 +930,40 @@ def main() -> None:
                     in_base=T_bc is not None,
                 )
 
+            if method == "kpt" and kpt_worker is not None:
+                kpt_worker.submit(raw)
+                res = kpt_worker.take_result()
+                if res is not None:
+                    kpt_poses = res
+                kpt_target = pick_target(
+                    kpt_poses, None if chosen is None else instances[chosen].xyxy
+                )
+
+            if cad_others is not None and method == "cad":
+                res = cad_others.take_result()
+                if res is not None:
+                    others_poses = res
+                    if kcam is not None:
+                        # 윤곽은 결과가 올 때 한 번만 그려 둔다
+                        for op in others_poses:
+                            op["outline"] = _cad_outline(op["T"], kcam, w, h)
+                now_o = time.monotonic()
+                if (now_o - last_others_t) >= max(0.2, float(args.cad_every)) and not cad_others.busy:
+                    clouds = [
+                        (inst.xyz, inst.class_id)
+                        for i, inst in enumerate(instances)
+                        if i != chosen and len(inst.xyz) >= 20
+                    ]
+                    if cad_others.submit(clouds, _work_desk_plane(plane, T_bc)):
+                        last_others_t = now_o
+                # 맨 위 브라켓이 바뀌어 겹쳐 보이는 것은 뺀다
+                if len(last_xyz) >= 20:
+                    top_anchor = _median_xyz(last_xyz)
+                    others_poses = [
+                        op for op in others_poses
+                        if float(np.linalg.norm(op["anchor"] - top_anchor)) >= 15.0
+                    ]
+
             if cad_worker is not None:
                 nxt = cad_worker.take_result()
                 if nxt is not None:
@@ -688,7 +1015,8 @@ def main() -> None:
                     class_streak += 1
                 else:
                     class_streak = 0
-                if len(last_xyz) >= 20 and due:
+                # 키포인트 방식일 때는 CAD 자동 등록을 쉬어 젯슨 계산을 아낀다
+                if len(last_xyz) >= 20 and due and method == "cad":
                     desk = _work_desk_plane(plane, T_bc)
                     anchor = _median_xyz(last_xyz)
                     far = last_full_anchor is not None and float(
@@ -767,6 +1095,10 @@ def main() -> None:
             hint = "v=3D s=save r=plane q=quit"
             if args.cad:
                 hint = "c=CAD " + hint
+            if kpt_worker is not None:
+                hint = "k=방식 i=검사 " + hint
+            if replay is not None:
+                hint += f" n/p {replay.idx + 1}/{len(replay.scenes)}"
             pose_txt = ""
             if chosen is not None and instances[chosen].class_id is not None:
                 pose_txt = "  " + pose_name(instances[chosen].class_id, korean=True)
@@ -779,10 +1111,33 @@ def main() -> None:
                 (0, 255, 0),
                 1,
             )
-            if args.cad:
+            if args.cad or method == "kpt":
                 place_font = 0.58
                 place_thick = 1
-                if cad_pose is not None:
+                if method == "kpt":
+                    if kpt_target is not None:
+                        p_xyz, p_base, p_body = _place_ui_xyzrpy(kpt_poses[kpt_target]["T"])
+                        xyz_line = (
+                            f"물체 x 축: {p_xyz[0]:.1f} (mm),  y 축: {p_xyz[1]:.1f} (mm),  "
+                            f"z 축: {p_xyz[2]:.1f} (mm)"
+                        )
+                        body_line = (
+                            f"물체 Rx: {p_body[0]:.1f} ,  Ry: {p_body[1]:.1f} ,  "
+                            f"Rz: {p_body[2]:.1f}"
+                        )
+                        base_line = (
+                            f"베이스 기준 Rx: {p_base[0]:.1f} ,  Ry: {p_base[1]:.1f} ,  "
+                            f"Rz: {p_base[2]:.1f}"
+                        )
+                    else:
+                        xyz_line = "물체 x/y/z 축: 브라켓 없음"
+                        body_line = "물체 Rx/Ry/Rz: -"
+                        base_line = "베이스 기준 Rx/Ry/Rz: -"
+                    cad_line = (
+                        f"[키포인트] 브라켓 {len(kpt_poses)}개  "
+                        f"{kpt_worker.seconds * 1000:.0f} ms/장  (k=CAD 정합)"
+                    )
+                elif cad_pose is not None:
                     on = cad_pose.get("scene_frac")
                     vis = cad_pose.get("vis_frac")
                     iou = cad_pose.get("xy_iou")
@@ -819,6 +1174,10 @@ def main() -> None:
                     body_line = "물체 Rx/Ry/Rz: 대기"
                     base_line = "베이스 기준 Rx/Ry/Rz: 대기"
                     cad_line = "CAD 대기"
+                if method == "cad" and others_poses:
+                    cad_line += f"  외 {len(others_poses)}개"
+                if method == "cad" and kpt_worker is not None:
+                    cad_line = "[CAD 정합] " + cad_line + "  (k=키포인트)"
                 overlay_lines = [
                     (50, xyz_line, (0, 255, 255)),
                     (78, body_line, (0, 255, 255)),
@@ -829,7 +1188,25 @@ def main() -> None:
                     if not text:
                         continue
                     put_text(bgr, text, (8, y), place_font, color, place_thick)
-            if cad_pose is not None:
+            if method == "kpt":
+                for j, kp in enumerate(kpt_poses):
+                    thick = 2 if j == kpt_target else 1
+                    for c in kp["outline"] or []:
+                        cv2.polylines(bgr, [c.astype(np.int32)], True, (255, 200, 0), thick, cv2.LINE_AA)
+                if kpt_target is not None:
+                    T_draw = invert_T(T_bc) @ np.asarray(kpt_poses[kpt_target]["T"], dtype=np.float64)
+                    _draw_cad_axes(bgr, T_draw, K)
+                    _draw_cad_axes(depth_vis, T_draw, K)
+            elif cad_pose is not None or others_poses:
+                for op in others_poses:
+                    for c in op.get("outline") or []:
+                        cv2.polylines(bgr, [c.astype(np.int32)], True, (255, 200, 0), 1, cv2.LINE_AA)
+                    T_o = np.asarray(op["T"], dtype=np.float64)
+                    if T_bc is not None:
+                        T_o = invert_T(T_bc) @ T_o
+                    _draw_cad_axes(bgr, T_o, K)
+                    _draw_cad_axes(depth_vis, T_o, K)
+            if method == "cad" and cad_pose is not None:
                 T_draw = np.asarray(cad_pose["T"], dtype=np.float64)
                 if T_bc is not None:
                     T_draw = invert_T(T_bc) @ T_draw
@@ -843,11 +1220,61 @@ def main() -> None:
                 break
             if key == ord("r") and not args.no_plane:
                 refit_plane = True
-            incoming = read_request()
+            if replay is not None and key in (ord("n"), ord("p")):
+                replay.step(1 if key == ord("n") else -1)
+                refit_plane = not args.no_plane
+                kpt_poses, kpt_target = [], None
+                others_poses = []
+                print(f"장면 {replay.name}")
+            if key == ord("k"):
+                if kpt_worker is None:
+                    print(f"키포인트 방식을 쓸 수 없습니다. {kpt_why}")
+                else:
+                    method = "kpt" if method == "cad" else "cad"
+                    kpt_poses, kpt_target = [], None
+                    print(f"자세 방식: {METHOD_KO[method]}")
+            if key == ord("i"):
+                if kcam is None:
+                    print("검사는 손눈 캘리브가 있어야 합니다.")
+                else:
+                    poses = current_poses()
+                    if not poses:
+                        print("검사할 자세가 없습니다.")
+                    else:
+                        judged = judge_all(raw, poses, kcam)
+                        title = f"검사 ({METHOD_KO[method]} 자세). 아무 키나 → 다시"
+                        print_judged(judged, title)
+                        cv2.imshow(WIN, np.hstack([draw_judged(raw, judged, title), depth_vis]))
+                        cv2.waitKey(0)
+            incoming, want_all = read_request_full()
             req_id = None
             if incoming and incoming != seen_req_id:
                 seen_req_id = incoming
                 req_id = incoming
+            if req_id is not None and want_all:
+                # 모든 브라켓 (load_all_pick_targets): 지금 방식의 자세들을 검사까지 해서 목록으로 보낸다
+                if kcam is None:
+                    write_status(req_id, "fail")
+                else:
+                    write_status(req_id, "run")
+                    poses = current_poses()
+                    objects = [] if not poses else objects_for_request(raw, poses)
+                    if objects:
+                        write_status(req_id, "ok", objects=objects)
+                    else:
+                        write_status(req_id, "no_box")
+                req_id = None
+            # 런처 「카메라로 집기」 요청 (구역 · 가까운 순 조건) 은 키포인트 방식이어도 아래 CAD 정합으로 처리한다.
+            if req_id is not None and method == "kpt" and not read_request_options().active:
+                # 키포인트 자세: 이미 나와 있으니 테두리 맞춤으로 다듬어 바로 보낸다
+                if kpt_target is None:
+                    write_status(req_id, "no_box")
+                else:
+                    T_send = refine_pose(raw, kpt_poses[kpt_target]["T"], kcam)
+                    xyz_ui, rpy_ui, _body_ui = _place_ui_xyzrpy(T_send)
+                    write_status(req_id, "ok", xyz=xyz_ui, rpy=rpy_ui)
+                    _log.info("키포인트 자세 보냄  xyz=%s", np.round(xyz_ui, 1).tolist())
+                req_id = None
             req_T_prev = None if cad_pose is None else cad_pose["T"]
             req_extra: dict = {}
             if req_id is not None and T_bc is not None:
@@ -927,22 +1354,17 @@ def main() -> None:
                     continue
                 ROI_DIR.mkdir(parents=True, exist_ok=True)
                 preview = ROI_DIR / f".preview_{frame_name}.ply"
-                if cad_pose is not None:
-                    from yolo.pose.register import _overlay_xyz, load_cad_xyz
+                # 보이는 브라켓 전부. CAD 는 맨 위 (기본 빨강) + 나머지 (빨강의 진하고 연한 색)
+                v_others = others_poses if method == "cad" else []
+                cad_vis = None
+                if cad_pose is not None or v_others:
+                    from yolo.pose.register import load_cad_xyz
 
-                    T_ov = cad_pose["T"]
                     cad_vis = load_cad_xyz(voxel_mm=_OVERLAY_VOXEL_MM)
-                    cam_o = None if T_bc is None else T_bc[:3, 3]
-                    o_xyz, o_rgb = _overlay_xyz(
-                        last_xyz,
-                        last_rgb,
-                        cad_vis,
-                        T_ov,
-                        camera_origin=cam_o,
-                    )
-                    write_ply(preview, o_xyz, o_rgb)
-                else:
-                    write_ply(preview, last_xyz, last_rgb)
+                o_xyz, o_rgb = _preview_cloud(instances, cad_pose, v_others, cad_vis)
+                write_ply(preview, o_xyz, o_rgb)
+                if v_others:
+                    print(f"Open3D: 맨 위 CAD 1개 + 나머지 {len(v_others)}개 (빨강 진하기로 구분)")
                 view_cmd = [
                     sys.executable,
                     str(Path(__file__).resolve().parent / "view" / "view_cloud.py"),
@@ -982,6 +1404,9 @@ def main() -> None:
                     print("저장할 점이 없습니다.")
                     continue
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # 리플레이로 다시 볼 수 있게 컬러 + 뎁스 장면도 남긴다
+                save_scene(ROI_DIR / "scenes" / f"scene_{stamp}", raw, depth, K, T_bc)
+                print(f"장면 저장 {ROI_DIR / 'scenes' / f'scene_{stamp}'}")
                 out = ROI_DIR / f"roi_{stamp}_{frame_name}.ply"
                 write_ply(out, last_xyz, last_rgb)
                 print(f"저장 {out}  n={len(last_xyz)}")
@@ -1001,6 +1426,10 @@ def main() -> None:
         cam.close()
         if cad_worker is not None:
             cad_worker.close()
+        if cad_others is not None:
+            cad_others.close()
+        if kpt_worker is not None:
+            kpt_worker.close()
         cv2.destroyAllWindows()
 
 

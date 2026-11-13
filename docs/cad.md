@@ -24,6 +24,6 @@ python yolo/pose/view/view_cad.py
 
 ## 같이 쓰는 곳
 
-- 형상 맞추기는 `yolo/pose/register.py`, 카메라로 위치를 구하는 창은 `yolo/pose/roi_cloud.py`입니다.
+- 형상 맞추기는 `yolo/pose/register.py`, 카메라로 위치를 구하는 창은 `yolo/pose/roi_cloud.py`입니다. 키포인트 방식 (`yolo/train/kpt_label.py`, 시뮬 `vision/sim/`) 과 불량 검사도 같은 STL 과 `mesh_rpy` · `mesh_xyz` 로 윤곽과 키포인트 자리를 만듭니다. STL 이나 이 값을 바꾸면 키포인트 모델을 다시 학습해야 합니다.
 - 펜던트 물건 칸(`pendant/teach_grasp.py`), 접근 자세 계산(`motion/grasp.py`), 픽 좌표(`motion/pick_targets.py`)가 `model.py`로 집기 점, 접근 거리, 내려놓는 XY를 읽습니다.
 

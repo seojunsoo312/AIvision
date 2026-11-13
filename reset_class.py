@@ -72,12 +72,16 @@ def targets_yolo() -> list[Path]:
     items: list[Path] = []
     items.extend(_collect_files(raw / "images", ("*.jpg", "*.jpeg", "*.png")))
     items.extend(_collect_files(raw / "labels", ("*.txt", "*.cache")))
+    # 키포인트 라벨 (kpt_label.py --labels yolo/datasets/raw/kpt_labels)
+    items.extend(_collect_files(raw / "kpt_labels", ("*.txt", "*.json", "*.cache")))
     items.extend(_collect_tree(YOLO / "datasets" / "splits"))
     items.extend(_collect_tree(YOLO / "datasets" / "custom"))
     items.extend(_collect_tree(YOLO / "runs"))
-    pt = YOLO / "weights" / "best.pt"
-    if pt.is_file():
-        items.append(pt)
+    # 학생이 학습한 가중치: 박스 모델, 키포인트 모델. 기본 모델 (box_base.pt, kpt_base.pt) 은 남긴다.
+    for name in ("box_best.pt", "best.pt", "kpt_best.pt"):  # best.pt = 박스 모델 예전 이름
+        pt = YOLO / "weights" / name
+        if pt.is_file():
+            items.append(pt)
     items.extend(_collect_files(YOLO / "datasets", ("**/*.cache",)))
     return _unique(items)
 
@@ -140,7 +144,7 @@ def main() -> None:
         ),
     )
     scope = parser.add_argument_group("범위 (하나 이상)")
-    scope.add_argument("--yolo", action="store_true", help="이미지·라벨·splits·runs·best.pt")
+    scope.add_argument("--yolo", action="store_true", help="이미지·라벨·splits·runs·box_best.pt·kpt_best.pt")
     scope.add_argument(
         "--calib",
         action="store_true",
