@@ -16,7 +16,6 @@ from vision.depth_cloud import (
     Z_MIN_MM,
     depth_edge_mask,
     largest_component,
-    mask_from_xyxy,
     plane_foreground_mask,
     points_from_mask,
 )
@@ -61,9 +60,13 @@ class _Box:
         self.cls = None
 
 
+# 브라켓은 책상 위에 놓여 있다 (CAD 책상 위 세 자세 · 키포인트와 같은 전제). 가장 긴 변이 42 mm 라
+# 어느 자세로 놓여도 이보다 높은 점은 브라켓일 수 없다: 흰 면에서 10~30 cm 가깝게 튀는 뎁스, 지나가는 팔 · 손.
+BRACKET_MAX_HEIGHT_MM = 60.0
+
 # YOLO 없이 뎁스로 찾는 물체: 이보다 작거나 (중앙 높이가) 높으면 브라켓이 아니다.
 BLOB_MIN_PIXELS = 300
-BLOB_MAX_HEIGHT_MM = 60.0
+BLOB_MAX_HEIGHT_MM = BRACKET_MAX_HEIGHT_MM
 _BLOB_BORDER_PX = 5
 _BLOB_SCALE = 2
 # 덩어리 둘레 띠(원래 픽셀로 8~20px) 중 책상 바닥 비율.
@@ -93,6 +96,19 @@ def _desk_ring_frac(depth, K, plane, plane_mm, mask, stat) -> float:
     height = height_above_plane(pts.reshape(-1, 3), plane).reshape(z.shape)
     desk = (z > Z_MIN_MM) & (z < Z_MAX_MM) & (np.abs(height) <= float(plane_mm))
     return float(desk[ring].mean())
+
+
+def _box_overlap(a, b) -> float:
+    """작은 상자 쪽에서 본 겹침 비율 (0~1)."""
+    iw = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    ih = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    small = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return 0.0 if small <= 0 else iw * ih / small
+
+
+def missed_blob_boxes(blobs: list[list[float]], yolo_xyxys: list[list[float]], overlap: float = 0.3) -> list[list[float]]:
+    """뎁스 덩어리 중 YOLO 상자와 거의 겹치지 않는 것 (YOLO 가 놓친 물체)."""
+    return [b for b in blobs if all(_box_overlap(b, y) < overlap for y in yolo_xyxys)]
 
 
 def depth_blob_boxes(
@@ -163,10 +179,12 @@ def collect_instances(
     T_base_cam: np.ndarray | None,
     drop_edges: bool = True,
     xyxys: list[list[float]] | None = None,
+    extra_xyxys: list[list[float]] | None = None,
 ) -> list[InstanceCloud]:
     """YOLO 상자마다 점군 하나, 책상 바탕과 가장자리의 튀는 뎁스는 뺀다.
 
     xyxys 를 주면 YOLO 결과 대신 그 상자들을 쓴다 (클래스 없음).
+    extra_xyxys 는 YOLO 상자 뒤에 더한다 (YOLO 가 놓친 뎁스 덩어리, 클래스 없음).
     """
     h, w = bgr.shape[:2]
     out: list[InstanceCloud] = []
@@ -176,10 +194,17 @@ def collect_instances(
         obb = getattr(result, "obb", None)
         boxes = getattr(result, "boxes", None)
         dets = boxes if boxes is not None and len(boxes) else obb
-    if dets is None:
+        dets = [] if dets is None else list(dets)
+    dets = list(dets) + [_Box(b) for b in extra_xyxys or []]
+    if not dets:
         return out
     in_base = T_base_cam is not None
+    # 이미지 전체 마스크는 프레임마다 한 번만 만들고, 브라켓마다 상자 안만 잘라 쓴다
+    # (브라켓마다 640×480 을 다시 계산하던 것이 카메라 창 한 프레임의 절반을 차지했다).
     keep = ~depth_edge_mask(depth) if drop_edges else None
+    fg = None if plane is None else plane_foreground_mask(depth, K, plane, height_mm=float(plane_mm))
+    zok = (depth > Z_MIN_MM) & (depth < Z_MAX_MM)
+    stride = max(1, int(stride))
     for i, det in enumerate(dets):
         raw = det.xyxy[0]
         if hasattr(raw, "cpu"):
@@ -195,21 +220,42 @@ def collect_instances(
             cls_arr = np.asarray(cls).reshape(-1)
             if len(cls_arr):
                 class_id = int(cls_arr[0])
-        roi = mask_from_xyxy(h, w, xyxy, pad=pad)
-        n_zok = int(
-            np.count_nonzero(
-                roi & (depth > Z_MIN_MM) & (depth < Z_MAX_MM)
-            )
-        )
-        # 책상 평면에서 plane_mm 이내 점은 제거한다.
-        if plane is not None:
-            roi = roi & plane_foreground_mask(depth, K, plane, height_mm=float(plane_mm))
-        if keep is not None:
-            roi = roi & keep
-        roi = largest_component(roi)
-        xyz, rgb = points_from_mask(depth, K, roi, bgr=bgr, stride=stride)
+        # mask_from_xyxy 와 같은 상자 (pad 포함, 화면 안으로 자름)
+        xa = max(0, int(np.floor(min(xa, xb))) - pad)
+        xe = min(w, int(np.ceil(max(xyxy[0], xyxy[2]))) + pad)
+        ya = max(0, int(np.floor(min(ya, yb))) - pad)
+        ye = min(h, int(np.ceil(max(xyxy[1], xyxy[3]))) + pad)
+        roi = np.zeros((h, w), dtype=bool)
+        if xe > xa and ye > ya:
+            box = (slice(ya, ye), slice(xa, xe))
+            n_zok = int(np.count_nonzero(zok[box]))
+            sub = np.ones((ye - ya, xe - xa), dtype=bool)
+            # 책상 평면에서 plane_mm 이내 점은 제거한다.
+            if fg is not None:
+                sub &= fg[box]
+            if keep is not None:
+                sub &= keep[box]
+            sub = largest_component(sub)
+            roi[box] = sub
+            # 점은 전체 이미지 기준 stride 격자에서 뽑는다 (상자 시작을 격자에 맞춘다)
+            x0 = -(-xa // stride) * stride
+            y0 = -(-ya // stride) * stride
+            Kc = np.asarray(K, dtype=np.float64).copy()
+            Kc[0, 2] -= x0
+            Kc[1, 2] -= y0
+            xyz, rgb = points_from_mask(depth[y0:ye, x0:xe], Kc, sub[y0 - ya:, x0 - xa:],
+                                        bgr=None if bgr is None else bgr[y0:ye, x0:xe], stride=stride)
+        else:
+            n_zok = 0
+            xyz, rgb = np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.uint8)
         if in_base and len(xyz):
             xyz = apply_T(xyz, T_base_cam)
+        if len(xyz):
+            # 책상 위 전제: BRACKET_MAX_HEIGHT_MM 보다 높은 점을 버린다 (맨 위 고르기 · 정합 모두 이 점군을 쓴다).
+            height = xyz[:, 2] if in_base else (height_above_plane(xyz, plane) if plane is not None else None)
+            if height is not None:
+                keep_h = height <= BRACKET_MAX_HEIGHT_MM
+                xyz, rgb = xyz[keep_h], rgb[keep_h]
         score = _height_score(xyz, None if in_base else plane, in_base=in_base)
         out.append(
             InstanceCloud(

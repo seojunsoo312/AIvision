@@ -1139,6 +1139,62 @@ def rest_rpys(class_id: int | None) -> list[tuple[int, tuple[float, float, float
     return [(cid, rpy) for cid in ids for rpy in REST_POSES[cid]]
 
 
+# 책상 위 세 자세 정합의 마지막 고르기: 촘촘한 6D ICP 결과 · 그것을 책상 위 자세로 눌러 앉힌 것 · 거친 결과.
+# 숫자가 클수록 먼저 (합격한 것끼리). 실물 장면 시험 (yolo/pose/scene_eval.py) 으로 정한다.
+REST_PICK_RANK = {"fine": 2, "seated": 1, "coarse": 0}
+
+
+def track_rest_icp(
+    cad_xyz: np.ndarray,
+    scene_xyz: np.ndarray,
+    T_init: np.ndarray,
+    *,
+    desk_plane: np.ndarray | None = None,
+    camera_origin: np.ndarray | None = None,
+) -> dict:
+    """따라가기 (rest 방식): 지난 자세를 책상 위 자세로 눌러 앉힌 뒤 x, y, yaw 만 다시 맞춘다.
+
+    자유 6D ICP (refine_icp) 로 따라가면 세운 브라켓이 윗면 잡음에 끌려 10° 쯤 기울고
+    보이는 면이 안 맞아 miss → 처음부터 다시 등록을 되풀이했다. 책상 위 자세로 묶으면 기울 수 없다.
+    """
+    up = np.array([0.0, 0.0, 1.0])
+    plane = _orient_desk_plane(
+        np.array([0.0, 0.0, 1.0, 0.0]) if desk_plane is None else desk_plane, up
+    )
+    cad_full = _as_xyz(cad_xyz)
+    scene_full = _clean_registration_scene(scene_xyz)
+    if len(cad_full) < MIN_POINTS or len(scene_full) < MIN_POINTS:
+        raise ValueError(f"점 부족  cad={len(cad_full)} scene={len(scene_full)}")
+    cam = np.zeros(3) if camera_origin is None else np.asarray(camera_origin, dtype=np.float64)
+    scene = _voxel(scene_full, REST_COARSE_VOXEL_MM)
+    cad = _voxel(cad_full, REST_COARSE_VOXEL_MM)
+    cad_index = _nn_index(cad_full)
+    T = rest_on_desk(np.asarray(T_init, dtype=np.float64), cad_xyz=cad_full, up=up, desk_plane=plane)
+    T, _d = _rest_icp(T, cad_index, cad_full, cad, scene, plane, _REST_ICP_STAGES[1:])
+    cov = pose_coverage(cad_full, scene_full, T, thresh_mm=3.0, camera_origin=cam, detail=True)
+    return {
+        "T": T,
+        "T_init": np.asarray(T_init, dtype=np.float64),
+        "fitness": cov["frac"],
+        "inlier_rmse": cov["median"],
+        "fitness_ransac": 0.0,
+        "inlier_rmse_ransac": 0.0,
+        "icp_method": "rest_track",
+        "scene_frac": cov["frac"],
+        "scene_med": cov["median"],
+        "scene_p90": cov["p90"],
+        "vis_frac": cov["vis_frac"],
+        "xy_iou": cov["xy_iou"],
+        "center_delta": cov["center_delta"],
+        "aligned_ok": cov["aligned_ok"],
+        "n_cad": int(len(cad_full)),
+        "n_scene": int(len(scene_full)),
+        "voxel_mm": float(REST_COARSE_VOXEL_MM),
+        "source": "rest_track",
+        "soft_gravity": True,
+    }
+
+
 def register_rest_icp(
     cad_xyz: np.ndarray,
     scene_xyz: np.ndarray,
@@ -1225,14 +1281,21 @@ def register_rest_icp(
         target = _cad_icp_target(cad_full, fine_voxel_mm)
     best = None
     for _score, T0, cid, rpy, yaw in keep:
-        T = T0
+        tries = [T0]
         if fine:
             T_sc = _partial_icp_to_cad(source, target, np.linalg.inv(T0), quick=True)
-            T = rest_if_close(np.linalg.inv(T_sc), cad_xyz=cad_full, up=up, desk_plane=plane)
-        cov = pose_coverage(cad_full, scene_full, T, thresh_mm=3.0, camera_origin=cam, detail=True)
-        key = _score_key(cov)
-        if best is None or key > best[0]:
-            best = (key, T, cov, cid, rpy, yaw)
+            T_fine = rest_if_close(np.linalg.inv(T_sc), cad_xyz=cad_full, up=up, desk_plane=plane)
+            # 촘촘한 ICP 가 윗면 잡음에 끌려 몇 ° 기울고 책상에서 뜨면, 보이는 면이 안 맞아 맞는 자세도 miss 가 된다.
+            # 그래서 촘촘한 결과 · 그것을 책상 위 자세로 눌러 앉힌 것 · 거친 결과를 모두 재서 가장 나은 것을 쓴다.
+            tries = [T_fine, rest_on_desk(T_fine, cad_xyz=cad_full, up=up, desk_plane=plane), T0]
+        # 합격한 것 중에서 고르는 순서 (REST_PICK_RANK). 같은 순위면 잘 맞는 쪽.
+        names = ("fine", "seated", "coarse") if fine else ("coarse",)
+        for name, T in zip(names, tries):
+            rank = REST_PICK_RANK[name]
+            cov = pose_coverage(cad_full, scene_full, T, thresh_mm=3.0, camera_origin=cam, detail=True)
+            key = (cov["aligned_ok"], rank) + _score_key(cov)
+            if best is None or key > best[0]:
+                best = (key, T, cov, cid, rpy, yaw)
     assert best is not None
     _key, T, cov, cid, rpy, yaw = best
     return {
@@ -1291,8 +1354,12 @@ def register_pose(
     desk_plane: np.ndarray | None = None,
     class_id: int | None = None,
     method: str = "class",
+    fallback: bool = True,
 ) -> dict:
     """한 인스턴스 점군 → T, xyzrpy.
+
+    fallback=False 면 rest 방식이 miss 일 때 느린 예전 방식 (클래스 · FPFH, 수 초~10 초) 으로 넘어가지 않고
+    miss 를 그대로 돌려준다 (나머지 브라켓을 차례로 맞출 때 한 개가 줄 전체를 막지 않게).
 
     method="rest": 책상 위 세 자세로 x, y, yaw 만 찾는 정합(register_rest_icp). 베이스 mm 장면 전용.
     class_id 는 쓰지 않고, 안 맞으면(miss) 아래 예전 방식(class_id 사용)으로 넘어간다.
@@ -1314,13 +1381,26 @@ def register_pose(
             camera_origin=cam,
             fine=method == "rest",
         )
-        if not raw.get("aligned_ok", False):
+        if not raw.get("aligned_ok", False) and not fallback:
+            pass
+        elif not raw.get("aligned_ok", False):
             # 책상 위 세 자세가 아니면(기대거나 쌓임) 예전 방식으로 한 번 더.
             print(
                 f"책상 위 자세 miss (on={raw['scene_frac']:.2f} vis={raw['vis_frac']:.2f}). "
                 "예전 방식으로 다시."
             )
             raw = None
+    if raw is None and T_init is not None and method in ("rest", "rest_coarse") and up is not None:
+        # 따라가기: 책상 위 자세로 묶어서. 안 맞으면 (옮겼거나 넘어짐) 같은 호출 안에서 처음부터 찾는다.
+        raw = track_rest_icp(cad_xyz, scene_xyz, T_init, desk_plane=desk_plane, camera_origin=cam)
+        if not raw.get("aligned_ok", False):
+            raw = register_rest_icp(
+                cad_xyz, scene_xyz, desk_plane=desk_plane, class_id=None,
+                camera_origin=cam, fine=method == "rest",
+            )
+            if not raw.get("aligned_ok", False) and fallback:
+                raw = None
+                T_init = None  # 아래 예전 방식 (클래스 · FPFH) 으로
     if raw is not None:
         pass
     elif T_init is not None:

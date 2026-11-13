@@ -59,7 +59,7 @@ from vision.depth_cloud import (
     write_ply,
 )
 from yolo.pose.debug.local_plane import SLICE_MM, local_pose
-from yolo.pose.instances import collect_instances, depth_blob_boxes, ordered_targets, select_topmost
+from yolo.pose.instances import collect_instances, depth_blob_boxes, missed_blob_boxes, ordered_targets, select_topmost
 from yolo.pose.pose_methods import (
     METHOD_KO,
     POSE_METHODS,
@@ -121,6 +121,24 @@ def _load_grasp_cad() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return _pose_mm_to_T(xyz, rpy), xyz, rpy
 
 
+# 대칭 자세 이름 맞추기에 쓰는 손눈 (main 에서 정한다). 없으면 (카메라 mm) 맞추지 않는다.
+_CANON_T_BC: np.ndarray | None = None
+
+
+def canonical_pose(T_base: np.ndarray) -> np.ndarray:
+    """브라켓은 대칭이라 같은 자세에 이름 (T) 이 둘이다. 키포인트 라벨과 같은 규칙 (canonical_T) 으로 하나를 고른다.
+
+    CAD 정합과 키포인트가 같은 브라켓에 같은 숫자 · 같은 축을 내게 한다 (6차시 비교표).
+    """
+    T = np.asarray(T_base, dtype=np.float64).reshape(4, 4)
+    if _CANON_T_BC is None:
+        return T
+    from vision.sim.keypoints import canonical_T
+    from yolo.train.kpt_label import symmetries
+
+    return canonical_T(T, _CANON_T_BC, symmetries())
+
+
 def _place_ui_xyzrpy(T_work_cad: np.ndarray):
     """펜던트 place UI용: xyz + 베이스 RPY + 물체축 RPY.
 
@@ -130,7 +148,7 @@ def _place_ui_xyzrpy(T_work_cad: np.ndarray):
     from motion.grasp import canonicalize_extrinsic_rpy, rpy_extrinsic_to_body_xyz
     from yolo.pose.register import T_to_xyzrpy
 
-    xyz, rpy_raw = T_to_xyzrpy(np.asarray(T_work_cad, dtype=np.float64).reshape(4, 4))
+    xyz, rpy_raw = T_to_xyzrpy(canonical_pose(T_work_cad))
     rpy_base = canonicalize_extrinsic_rpy(rpy_raw)
     rpy_body = rpy_extrinsic_to_body_xyz(rpy_base)
     return (
@@ -175,10 +193,15 @@ def _draw_cad_axes(
     cv2.circle(img, po, 4, (255, 255, 255), -1, cv2.LINE_AA)
 
 
-def _has_dets(result) -> bool:
+def _yolo_xyxys(result) -> list[list[float]]:
+    """YOLO 상자들 [x1, y1, x2, y2] (OBB 면 감싸는 상자)."""
     boxes = getattr(result, "boxes", None)
+    if boxes is not None and len(boxes):
+        return [[float(v) for v in b] for b in boxes.xyxy.cpu().numpy()]
     obb = getattr(result, "obb", None)
-    return bool((boxes is not None and len(boxes)) or (obb is not None and len(obb)))
+    if obb is not None and len(obb):
+        return [[float(v) for v in b] for b in obb.xyxy.cpu().numpy()]
+    return []
 
 
 def _median_xyz(xyz: np.ndarray) -> np.ndarray:
@@ -191,96 +214,186 @@ def _device() -> str | int:
     return 0 if torch.cuda.is_available() else "cpu"
 
 
-class _CadOthers:
-    """맨 위 하나 (펜던트 집기용, _CadWorker) 말고 나머지 브라켓도 CAD 정합한다. 화면 · 검사용.
+class _CadTracks:
+    """CAD 정합을 브라켓마다 「자리」 로 기억한다 (화면 · 검사 · 모든 브라켓 요청용).
 
-    한 번에 브라켓 목록을 받아 차례로 맞춘다. 지난번 자리에서 move_mm 안이면 다시 계산하지 않고,
-    reset_mm 안이면 지난 자세에서 ICP 만 (추적), 그보다 멀거나 새 브라켓이면 처음부터 등록한다.
-    실패한 자리도 기억해서, 그 브라켓이 move_mm 넘게 움직이기 전까지는 다시 해 보지 않는다.
+    키포인트처럼 보이는 브라켓을 모두 다루되, 정합은 수 초 걸리므로 바뀐 브라켓만 다시 맞춘다.
+      새 자리                     → 처음부터 (책상 위 세 자세, 느린 예전 방식은 안 씀)
+      맞춘 자리에서 move_mm 안     → 그대로 (계산 안 함)
+      move_mm ~ reset_mm 움직임    → 지난 자세에서 따라가기, 안 맞으면 같은 호출 안에서 처음부터
+      실패한 자리                  → retry_s 마다 다시 (움직이면 바로)
+      drop_s 동안 안 보인 자리      → 지운다 (YOLO 가 몇 장 놓쳐도 자세가 깜빡이지 않게)
+    거리는 x · y 만 본다: 검은 브라켓은 뎁스 높이가 프레임마다 20 mm 가까이 흔들려 z 를 넣으면 늘 「움직임」 이 된다.
+    새 결과가 나오기 전까지 지난 결과를 그대로 보인다 (다시 계산하는 동안 화면이 비지 않게).
     """
 
-    def __init__(self, *, voxel_mm: float, flip: bool, tries: int, camera_origin, method: str,
-                 move_mm: float, reset_mm: float):
-        from yolo.pose.register import register_pose
-
-        self._register_pose = register_pose
+    def __init__(self, *, voxel_mm: float = 1.0, flip: bool = True, tries: int = 4, camera_origin=None,
+                 method: str = "rest", move_mm: float = 8.0, reset_mm: float = 30.0, retry_s: float = 8.0,
+                 drop_s: float = 3.0, register_fn=None, clock=time.monotonic, start_thread: bool = True,
+                 verbose: bool = True):
+        if register_fn is None:
+            from yolo.pose.register import register_pose as register_fn
+        self._register = register_fn
         self.kw = dict(voxel_mm=voxel_mm, flip=flip, tries=tries, camera_origin=camera_origin, method=method)
-        self.move_mm = float(move_mm)
-        self.reset_mm = float(reset_mm)
+        self.move_mm, self.reset_mm = float(move_mm), float(reset_mm)
+        self.retry_s, self.drop_s = float(retry_s), float(drop_s)
+        self._clock = clock
+        self.verbose = verbose
         self._lock = threading.Lock()
-        self._job: list | None = None
-        self._desk = None
-        self._cache: list[dict] = []  # 지난번 결과 {"anchor", "T" (실패면 None), "class_id"}
-        self.result: list[dict] | None = None
+        self._job: tuple | None = None
+        self._tracks: list[dict] = []  # {"anchor" (x, y, z), "T" 또는 None, "pose" (정합 결과), "seen", "fail_t"}
+        self.version = 0  # 자리 목록이 바뀔 때마다 1 씩 (화면이 윤곽을 다시 그릴 때 본다)
         self.busy = False
         self._stop = False
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        self._thread = None
+        if start_thread:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
 
+    # --- 카메라 루프 쪽 ---
     def submit(self, clouds: list[tuple[np.ndarray, int | None]], desk_plane) -> bool:
-        """clouds: 브라켓마다 (점군 베이스 mm, YOLO 자세 클래스 또는 None)."""
+        """clouds: 보이는 브라켓마다 (점군 베이스 mm, YOLO 자세 클래스 또는 None)."""
         with self._lock:
             if self.busy:
                 return False
-            self._job = [(np.asarray(x, dtype=np.float64).copy(), c) for x, c in clouds]
-            self._desk = None if desk_plane is None else np.asarray(desk_plane, dtype=np.float64).copy()
+            self._job = ([(np.asarray(x, dtype=np.float64).copy(), c) for x, c in clouds],
+                         None if desk_plane is None else np.asarray(desk_plane, dtype=np.float64).copy())
             self.busy = True
         return True
 
-    def _one(self, xyz: np.ndarray, class_id, desk) -> dict:
-        anchor = _median_xyz(xyz)
-        prev = None
-        if self._cache:
-            d = [float(np.linalg.norm(anchor - c["anchor"])) for c in self._cache]
-            j = int(np.argmin(d))
-            if d[j] < self.move_mm:
-                return dict(self._cache[j])  # 그대로 있음 (성공이든 실패든)
-            if d[j] < self.reset_mm and self._cache[j]["T"] is not None:
-                prev = self._cache[j]
+    def snapshot(self) -> list[dict]:
+        with self._lock:
+            return [dict(t) for t in self._tracks]
+
+    def find(self, anchor) -> dict | None:
+        """anchor (점군 가운데) 와 같은 자리. 없으면 None."""
+        with self._lock:
+            j = self._nearest(np.asarray(anchor, dtype=np.float64), self._tracks)
+            return None if j is None else dict(self._tracks[j])
+
+    def set_pose(self, anchor, pose: dict) -> None:
+        """c · 등록 요청으로 맞춘 결과를 그 자리에 넣는다."""
+        with self._lock:
+            a = np.asarray(anchor, dtype=np.float64)
+            j = self._nearest(a, self._tracks)
+            t = {"anchor": a, "seen": self._clock(), "fail_t": None, "T": None, "pose": None}
+            if j is None:
+                self._tracks.append(t)
+            else:
+                t = self._tracks[j]
+            self._apply(t, a, pose)
+            self.version += 1
+
+    def clear(self) -> None:
+        with self._lock:
+            self._tracks = []
+            self.version += 1
+
+    def close(self) -> None:
+        self._stop = True
+        if self._thread is not None:
+            self._thread.join(timeout=10.0)
+
+    # --- 계산 쪽 ---
+    def _xy(self, a, b) -> float:
+        return float(np.linalg.norm(np.asarray(a)[:2] - np.asarray(b)[:2]))
+
+    def _nearest(self, anchor, tracks) -> int | None:
+        d = [self._xy(anchor, t["anchor"]) for t in tracks]
+        if not d or min(d) >= self.reset_mm:
+            return None
+        return int(np.argmin(d))
+
+    def _apply(self, t: dict, anchor, pose) -> None:
+        ok = pose is not None and pose.get("aligned_ok", False)
+        t["anchor"] = np.asarray(anchor, dtype=np.float64)
+        t["pose"] = pose
+        t["T"] = np.asarray(pose["T"], dtype=np.float64) if ok else None
+        t["fail_t"] = None if ok else self._clock()
+
+    def _fit(self, xyz, class_id, desk, T_prev) -> dict | None:
         try:
-            pose = self._register_pose(
+            return self._register(
                 xyz,
                 T_base_cam=None,
-                T_init=None if prev is None else prev["T"],
-                T_prev=None if prev is None else prev["T"],
+                T_init=T_prev,
+                T_prev=T_prev,
                 desk_plane=desk,
-                class_id=class_id if prev is None else None,
+                class_id=class_id if T_prev is None else None,
+                fallback=False,  # 한 개가 느린 예전 방식으로 10 초씩 줄을 막지 않게
                 **self.kw,
             )
-        except Exception as exc:
-            print(f"CAD 정합 실패 (다른 브라켓): {exc}")
-            pose = None
-        if pose is None or not pose.get("aligned_ok", False):
-            return {"anchor": anchor, "T": None, "class_id": None}
-        return {"anchor": anchor, "T": np.asarray(pose["T"], dtype=np.float64), "class_id": pose.get("class_id")}
+        except Exception as exc:  # noqa: BLE001 (카메라 창은 계속 돈다)
+            print(f"CAD 정합 실패: {exc}")
+            return None
+
+    def process(self, clouds, desk) -> int:
+        """한 번 돌린다 (스레드 · 테스트 공통). 반환: 정합을 몇 번 했는지."""
+        now = self._clock()
+        with self._lock:
+            tracks = self._tracks
+            anchors = [_median_xyz(x) for x, _c in clouds]
+            # 가까운 짝부터 하나씩 묶는다
+            pairs = sorted(
+                (self._xy(a, t["anchor"]), i, j) for i, a in enumerate(anchors) for j, t in enumerate(tracks)
+            )
+            cloud_of: dict[int, int] = {}
+            used: set[int] = set()
+            for d, i, j in pairs:
+                if d >= self.reset_mm or i in used or j in cloud_of:
+                    continue
+                cloud_of[j] = i
+                used.add(i)
+            todo = []  # (순서, cloud i, track 또는 None, T_prev)
+            for j, t in enumerate(tracks):
+                i = cloud_of.get(j)
+                if i is None:
+                    continue
+                t["seen"] = now
+                moved = self._xy(anchors[i], t["anchor"]) >= self.move_mm
+                if t["T"] is not None and moved:
+                    todo.append((1, i, t, t["T"]))  # 따라가기
+                elif t["T"] is None and (moved or t["fail_t"] is None or now - t["fail_t"] >= self.retry_s):
+                    todo.append((2, i, t, None))  # 실패한 자리 다시
+            for i in range(len(clouds)):
+                if i not in used:
+                    t = {"anchor": anchors[i], "seen": now, "fail_t": None, "T": None, "pose": None}
+                    tracks.append(t)
+                    todo.append((0, i, t, None))  # 새 자리
+            kept = [t for t in tracks if now - t["seen"] <= self.drop_s]
+            if len(kept) != len(tracks):
+                self._tracks = kept
+                self.version += 1
+        todo.sort(key=lambda item: item[0])
+        for _order, i, t, T_prev in todo:
+            if self._stop:
+                break
+            xyz, cid = clouds[i]
+            t0 = time.perf_counter()
+            pose = self._fit(xyz, cid, desk, T_prev)
+            ok = pose is not None and pose.get("aligned_ok", False)
+            if self.verbose:
+                kind = ("새 자리", "따라가기", "다시")[_order]
+                print(f"CAD {kind} ({anchors[i][0]:.0f}, {anchors[i][1]:.0f}) "
+                      f"{'ok' if ok else 'miss'} {time.perf_counter() - t0:.1f}s")
+            with self._lock:
+                self._apply(t, anchors[i], pose)
+                self.version += 1
+        return len(todo)
 
     def _loop(self) -> None:
         while not self._stop:
             with self._lock:
-                job, desk = self._job, self._desk
+                job = self._job
                 self._job = None
             if job is None:
                 time.sleep(0.03)
                 continue
-            done = []
-            for xyz, cid in job:
-                if self._stop:
-                    break
-                done.append(self._one(xyz, cid, desk))
-            self._cache = done
-            with self._lock:
-                self.result = [r for r in done if r["T"] is not None]
-                self.busy = False
-
-    def take_result(self) -> list[dict] | None:
-        with self._lock:
-            res = self.result
-            self.result = None
-        return res
-
-    def close(self) -> None:
-        self._stop = True
-        self._thread.join(timeout=10.0)
+            try:
+                self.process(*job)
+            finally:
+                with self._lock:
+                    self.busy = False
 
 
 class _CadWorker:
@@ -459,11 +572,21 @@ class _CadWorker:
 
 # 점 간격과 화면. 실행할 때 바꾸지 않는다.
 _STRIDE = 1
+# 맨 위 브라켓 버팀: 지난번 등록한 브라켓 (가운데가 _TOP_SAME_MM 안) 이 가장 높은 것보다
+# _TOP_KEEP_MM 이상 낮아지기 전까지는 그것을 계속 맨 위로 본다.
+_TOP_SAME_MM = 20.0
+# CAD 가 miss 한 자리를 다시 해 보는 간격 (초), 자리 목록을 갱신하는 간격 (초)
+_CAD_MISS_RETRY_S = 8.0
+_TRACK_EVERY_S = 0.5
+# 박스 모델 · 점군을 다시 구하는 간격 (프레임). 키포인트 방식 / CAD 정합
+_KPT_BOX_EVERY = 4
+_CAD_BOX_EVERY = 2
+# 검은 브라켓은 뎁스가 프레임마다 20 mm 가까이 오르내려 10 mm 로는 맨 위가 흰 · 검 사이를 오갔다.
+# 30 mm 면 다른 브라켓 위에 올라간 정도 (판 높이 이상) 일 때만 바뀐다.
+_TOP_KEEP_MM = 30.0
 _PAD = 2
 _VOXEL_MM = 1.0
 _OVERLAY_VOXEL_MM = 0.5
-# YOLO 자세가 이 프레임 수만큼 연속으로 달라야 다시 전체 등록한다(약 0.7초).
-_CLASS_CHANGE_FRAMES = 10
 _OUTLIER_STD = 1.5
 _OUTLIER_NB = 20
 # v 키 Open3D 미리보기의 CAD 점 색 (RGB). 맨 위 브라켓은 기본 빨강, 나머지는 같은 빨강 계열의
@@ -570,7 +693,7 @@ def main() -> None:
         type=float,
         default=2.5,
         metavar="SEC",
-        help="물체가 움직인 뒤 ICP를 다시 하는 주기(초). 전체 검색은 한 번, c 로만 다시",
+        help="(쓰지 않음: 브라켓마다 자리를 기억해 바뀐 것만 바로 다시 맞춘다)",
     )
     parser.add_argument(
         "--cad-move-mm",
@@ -589,7 +712,7 @@ def main() -> None:
     parser.add_argument(
         "--no-blobs",
         action="store_true",
-        help="YOLO 가 아무것도 못 찾을 때 뎁스 덩어리로 물체 찾기를 끈다",
+        help="YOLO 가 놓친 물체를 뎁스 덩어리로 채우는 것을 끈다",
     )
     parser.add_argument(
         "--register",
@@ -668,6 +791,8 @@ def main() -> None:
         else:
             T_bc, t_path = load_T_base_cam()
         frame_name = "base_mm"
+        global _CANON_T_BC
+        _CANON_T_BC = np.asarray(T_bc, dtype=np.float64)
         print(f"T_base_cam {t_path}")
         _log.info("손눈 캘리브 %s", t_path)
 
@@ -694,18 +819,17 @@ def main() -> None:
     last_pose = None
     cad_pose = None
     viewer_process = None
-    cad_worker = None
-    cad_others = None  # 맨 위 말고 나머지 브라켓 CAD 정합
+    cad_worker = None  # c · 등록 요청 (펜던트, 카메라로 집기) 때 고른 브라켓을 처음부터 맞춘다
+    cad_worker_anchor = None  # 그 요청을 보낸 자리 (결과를 자리 목록에 넣을 때)
+    cad_tracks = None  # 보이는 브라켓마다 자리를 기억하는 CAD 정합 (화면 · 검사 · 모든 브라켓 요청)
+    track_list: list[dict] = []
+    track_version = -1
+    last_track_submit = 0.0
     others_poses: list[dict] = []
-    last_others_t = 0.0
-    last_cad_t = 0.0
-    last_cad_anchor = None
-    cad_full_done = False
-    # 마지막 전체 등록을 보낸 자리와 YOLO 자세. 많이 옮기거나 자세가 바뀌면 다시 전체 등록한다.
-    last_full_anchor = None
-    last_full_class = None
-    # YOLO 자세는 프레임마다 흔들린다. 같은 새 자세가 이만큼 이어져야 바뀐 것으로 본다.
-    class_streak = 0
+    top_track = None
+    top_anchor_prev = None  # 지난 프레임에 맨 위로 고른 브라켓 가운데 (두 방식 공통)
+    instances = None
+    frame_no = 0
     pending_req_id: str | None = None
     pending_req_extra: dict = {}
     seen_req_id = read_request()
@@ -727,7 +851,7 @@ def main() -> None:
             frame_name=frame_name,
             method=args.register,
         )
-        cad_others = _CadOthers(
+        cad_tracks = _CadTracks(
             voxel_mm=_VOXEL_MM,
             flip=bool(args.base),
             tries=4,
@@ -735,20 +859,13 @@ def main() -> None:
             method=args.register,
             move_mm=args.cad_move_mm,
             reset_mm=args.cad_reset_mm,
+            retry_s=_CAD_MISS_RETRY_S,
         )
         if args.base:
             print(
-                (
-                    "CAD: 책상 위 세 자세(세우기/눕히기/비스듬히) 중에서 x·y·회전을 찾는다. "
-                    "안 맞으면 YOLO 자세 + ICP 로 한 번 더. "
-                    if args.register == "rest"
-                    else "CAD: YOLO 자세(세우기/눕히기/비스듬히)로 한 번 맞춘다. "
-                )
-                + "맞으면 축을 고정하고, "
-                f"{args.cad_move_mm:.0f}mm 이상 움직이면 ICP. "
-                "클래스 후보가 모두 실패하면 전체 검색 한 번. "
-                f"{args.cad_reset_mm:.0f}mm 이상 옮기거나 자세가 바뀌거나 추적이 실패하면 처음부터. "
-                "miss면 옮길 때까지 멈춤. c 는 처음부터."
+                "CAD: 보이는 브라켓마다 책상 위 세 자세(세우기/눕히기/비스듬히) 중에서 x·y·회전을 찾고 자리를 기억한다. "
+                f"{args.cad_move_mm:.0f}mm 넘게 움직인 브라켓만 다시 맞추고, "
+                f"miss 한 자리는 {_CAD_MISS_RETRY_S:.0f}초마다 다시. c 는 맨 위를 처음부터 (예전 방식까지)."
             )
         else:
             print(
@@ -775,6 +892,9 @@ def main() -> None:
     # 키포인트도 학생이 학습한 모델로만 쓴다 (기본 모델로 대신 켜지 않는다). 다른 모델은 --kpt-weights 로.
     kpt_weights = args.kpt_weights if args.kpt_weights is not None else KPT_BEST_PT
     kpt_why = ""  # 키포인트 방식을 못 쓰는 이유 (k 를 눌렀을 때 안내)
+    # 검사 (i) · 모든 브라켓 요청이 쓰는 카메라. 키포인트 모델이 없어도 손눈만 있으면 만든다.
+    if T_bc is not None:
+        kcam = kpt_camera(K, T_bc, dist=np.zeros(5) if replay is not None else None)
     if T_bc is None:
         kpt_why = "손눈 캘리브가 없습니다 (4차시)."
     elif not Path(kpt_weights).is_file():
@@ -783,7 +903,6 @@ def main() -> None:
             "6차시 키포인트 학습 (python yolo/train/kpt_train.py) 뒤에 쓸 수 있습니다."
         )
     else:
-        kcam = kpt_camera(K, T_bc, dist=np.zeros(5) if replay is not None else None)
         try:
             print("키포인트 모델 로드 중...")
             kpt_worker = KptWorker(kcam, kpt_weights)
@@ -817,14 +936,32 @@ def main() -> None:
             max_size=noise_max_size,
         )
 
+    def _detect_instances(bgr: np.ndarray, depth: np.ndarray) -> list:
+        """박스 모델 + 놓친 것은 뎁스 덩어리 → 브라켓마다 점군."""
+        result = model.predict(bgr, conf=args.conf, device=device, verbose=False, imgsz=640)[0]
+        blob_boxes = None
+        if not args.no_blobs and plane is not None:
+            # YOLO 가 놓친 브라켓 (새 책상의 흰 브라켓, 검은 브라켓) 을 뎁스 덩어리로 채운다.
+            # YOLO 상자와 겹치지 않는 덩어리만 더한다 (클래스 없음 → CAD 정합이 자세를 고른다).
+            blob_boxes = missed_blob_boxes(depth_blob_boxes(depth, K, plane, plane_mm, T_bc), _yolo_xyxys(result))
+        return collect_instances(
+            depth=depth,
+            bgr=bgr,
+            K=K,
+            result=result,
+            plane=plane,
+            pad=_PAD,
+            plane_mm=plane_mm,
+            stride=_STRIDE,
+            T_base_cam=T_bc,
+            extra_xyxys=blob_boxes,
+        )
+
     def current_poses() -> list[np.ndarray]:
         """지금 방식으로 구한 브라켓 자세들 (베이스 mm). CAD 정합은 맨 위 하나 + 나머지."""
         if method == "kpt":
             return [kp["T"] for kp in kpt_poses]
-        poses = [op["T"] for op in others_poses]
-        if cad_pose is not None and cad_pose.get("aligned_ok", False):
-            poses = [cad_pose["T"]] + poses
-        return poses
+        return [t["T"] for t in track_list if t["T"] is not None]
 
     def objects_for_request(bgr: np.ndarray, poses: list[np.ndarray]) -> list[dict]:
         """자세들 → 검사 (테두리 맞춤 · 흰/검 · 양/불) → 펜던트 숫자 목록. 브라켓 아님은 빼고, 로봇에서 가까운 순."""
@@ -890,28 +1027,29 @@ def main() -> None:
                     print(f"책상 평면 실패: {exc}. r로 다시 시도하세요.")
                 refit_plane = False
 
-            results = model.predict(
-                bgr, conf=args.conf, device=device, verbose=False, imgsz=640
-            )
-            result = results[0]
             depth_vis = colorize_depth(depth)
-            blob_boxes = None
-            if not args.no_blobs and plane is not None and not _has_dets(result):
-                # 새 책상의 흰 브라켓은 예전 YOLO 가 못 찾는다. 흰색 YOLO 학습 전까지 뎁스 덩어리로.
-                blob_boxes = depth_blob_boxes(depth, K, plane, plane_mm, T_bc)
-            instances = collect_instances(
-                depth=depth,
-                bgr=bgr,
-                K=K,
-                result=result,
-                plane=plane,
-                pad=_PAD,
-                plane_mm=plane_mm,
-                stride=_STRIDE,
-                T_base_cam=T_bc,
-                xyxys=blob_boxes,
-            )
+            frame_no += 1
+            # 박스 모델 · 점군은 맨 위 고르기와 CAD 자리 목록 (0.5 초마다) 에 쓰인다. 매 프레임 구하면 화면이 느려져
+            # 몇 프레임에 한 번만 다시 구한다 (키포인트 방식은 두 모델이 GPU 를 나눠 써서 더 드물게).
+            every = _KPT_BOX_EVERY if method == "kpt" else _CAD_BOX_EVERY
+            reuse = instances is not None and frame_no % every != 0
+            if not reuse:
+                instances = _detect_instances(bgr, depth)
             chosen = select_topmost(instances)
+            if chosen is not None and T_bc is not None and top_anchor_prev is not None:
+                # 높이가 비슷한 브라켓끼리 맨 위가 프레임마다 바뀌면 화면 숫자가 두 브라켓 사이를 오간다.
+                # 지난 프레임에 고른 브라켓이 그대로 있고 TOP_KEEP_MM 넘게 낮아지지 않았으면 계속 그것을 고른다.
+                best_h = instances[chosen].height_score
+                for i, inst in enumerate(instances):
+                    if (
+                        len(inst.xyz) >= 20
+                        and float(np.linalg.norm(_median_xyz(inst.xyz) - top_anchor_prev)) < _TOP_SAME_MM
+                        and inst.height_score >= best_h - _TOP_KEEP_MM
+                    ):
+                        chosen = i
+                        break
+            if chosen is not None and len(instances[chosen].xyz):
+                top_anchor_prev = _median_xyz(instances[chosen].xyz)
             n_det = len(instances)
             cad_class_id = None
             if chosen is not None and T_bc is not None:
@@ -939,53 +1077,45 @@ def main() -> None:
                     kpt_poses, None if chosen is None else instances[chosen].xyxy
                 )
 
-            if cad_others is not None and method == "cad":
-                res = cad_others.take_result()
-                if res is not None:
-                    others_poses = res
+            if cad_tracks is not None:
+                # 키포인트 방식일 때는 CAD 를 쉬어 젯슨 계산을 아낀다 (자리 목록은 남겨 둔다)
+                now_t = time.monotonic()
+                if method == "cad" and now_t - last_track_submit >= _TRACK_EVERY_S and not cad_tracks.busy:
+                    clouds = [(inst.xyz, inst.class_id) for inst in instances if len(inst.xyz) >= 20]
+                    if cad_tracks.submit(clouds, _work_desk_plane(plane, T_bc)):
+                        last_track_submit = now_t
+                if cad_tracks.version != track_version:
+                    track_version = cad_tracks.version
+                    track_list = cad_tracks.snapshot()
                     if kcam is not None:
-                        # 윤곽은 결과가 올 때 한 번만 그려 둔다
-                        for op in others_poses:
-                            op["outline"] = _cad_outline(op["T"], kcam, w, h)
-                now_o = time.monotonic()
-                if (now_o - last_others_t) >= max(0.2, float(args.cad_every)) and not cad_others.busy:
-                    clouds = [
-                        (inst.xyz, inst.class_id)
-                        for i, inst in enumerate(instances)
-                        if i != chosen and len(inst.xyz) >= 20
-                    ]
-                    if cad_others.submit(clouds, _work_desk_plane(plane, T_bc)):
-                        last_others_t = now_o
-                # 맨 위 브라켓이 바뀌어 겹쳐 보이는 것은 뺀다
-                if len(last_xyz) >= 20:
-                    top_anchor = _median_xyz(last_xyz)
-                    others_poses = [
-                        op for op in others_poses
-                        if float(np.linalg.norm(op["anchor"] - top_anchor)) >= 15.0
-                    ]
+                        # 윤곽은 결과가 바뀔 때 한 번만 그려 둔다
+                        for t in track_list:
+                            t["outline"] = None if t["T"] is None else _cad_outline(t["T"], kcam, w, h)
+                # 고른 (맨 위) 브라켓의 자리 → 숫자 · 축, 나머지 맞춘 자리 → 윤곽 · 축
+                top_track = None
+                if len(last_xyz) >= 20 and track_list:
+                    a = _median_xyz(last_xyz)
+                    d = [float(np.linalg.norm(a[:2] - t["anchor"][:2])) for t in track_list]
+                    j_top = int(np.argmin(d))
+                    if d[j_top] < float(args.cad_reset_mm):
+                        top_track = track_list[j_top]
+                cad_pose = None
+                if top_track is not None and top_track["T"] is not None:
+                    cad_pose = {**(top_track["pose"] or {}), "T": top_track["T"]}
+                others_poses = [
+                    {"T": t["T"], "anchor": t["anchor"], "outline": t.get("outline")}
+                    for t in track_list
+                    if t["T"] is not None and t is not top_track
+                ]
 
             if cad_worker is not None:
                 nxt = cad_worker.take_result()
                 if nxt is not None:
-                    tracked = str(nxt.get("source", "")).endswith("track")
-                    # 실패한 전체 검색은 숫자·축에 내지 않고, 다시 돌리지 않는다.
-                    if nxt.get("aligned_ok", False):
-                        cad_pose = nxt
-                        cad_full_done = True
-                        if len(last_xyz) >= 20:
-                            last_cad_anchor = _median_xyz(last_xyz)
-                    elif tracked and cad_pose is not None:
-                        # 옛 축을 계속 보이면 물체를 옮긴 뒤에도 옛 자리가 남는다.
-                        cad_pose = None
-                        last_cad_anchor = None
-                        cad_full_done = False
-                        print("CAD 추적 miss. 처음부터 다시 등록합니다.")
-                    else:
-                        cad_pose = None
-                        last_cad_anchor = None
-                        cad_full_done = True
-                        print("CAD miss. 전체 검색은 멈춤. 처음부터는 c.")
-                    if pending_req_id is not None and not tracked:
+                    if cad_tracks is not None and cad_worker_anchor is not None:
+                        cad_tracks.set_pose(cad_worker_anchor, nxt)
+                    if not nxt.get("aligned_ok", False):
+                        print("CAD miss. c 로 다시.")
+                    if pending_req_id is not None:
                         _log.info(
                             "등록 끝  성공=%s  겹침=%.3f  오차=%.2fmm",
                             bool(nxt.get("aligned_ok", False)),
@@ -1004,60 +1134,6 @@ def main() -> None:
                     cad_worker.take_error()
                     write_status(pending_req_id, "fail")
                     pending_req_id = None
-                now = time.monotonic()
-                due = (now - last_cad_t) >= max(0.2, float(args.cad_every))
-                pose_ok = cad_pose is not None and cad_pose.get("aligned_ok", False)
-                if (
-                    cad_class_id is not None
-                    and last_full_class is not None
-                    and cad_class_id != last_full_class
-                ):
-                    class_streak += 1
-                else:
-                    class_streak = 0
-                # 키포인트 방식일 때는 CAD 자동 등록을 쉬어 젯슨 계산을 아낀다
-                if len(last_xyz) >= 20 and due and method == "cad":
-                    desk = _work_desk_plane(plane, T_bc)
-                    anchor = _median_xyz(last_xyz)
-                    far = last_full_anchor is not None and float(
-                        np.linalg.norm(anchor - last_full_anchor)
-                    ) >= max(1.0, float(args.cad_reset_mm))
-                    class_changed = class_streak >= _CLASS_CHANGE_FRAMES
-                    full = False
-                    if pose_ok and (far or class_changed):
-                        full = True
-                    elif pose_ok:
-                        moved = (
-                            last_cad_anchor is None
-                            or float(np.linalg.norm(anchor - last_cad_anchor))
-                            >= max(1.0, float(args.cad_move_mm))
-                        )
-                        if moved and cad_worker.submit(
-                            last_xyz,
-                            T_init=cad_pose["T"],
-                            T_prev=cad_pose["T"],
-                            desk_plane=desk,
-                        ):
-                            last_cad_t = now
-                    else:
-                        # 실패한 자리에서는 반복하지 않고, 옮기거나 자세가 바뀌면 다시 해 본다.
-                        full = not cad_full_done or far or class_changed
-                    if full and cad_worker.submit(
-                        last_xyz,
-                        T_init=None,
-                        T_prev=None,
-                        desk_plane=desk,
-                        class_id=cad_class_id,
-                    ):
-                        last_cad_t = now
-                        cad_full_done = True
-                        last_full_anchor = anchor
-                        last_full_class = cad_class_id
-                        class_streak = 0
-                        if far:
-                            print("CAD 물체를 옮김. 처음부터 다시 등록")
-                        elif class_changed:
-                            print("CAD 자세가 바뀜. 처음부터 다시 등록")
 
             for i, inst in enumerate(instances):
                 x1, y1, x2, y2 = [int(v) for v in inst.xyxy[:4]]
@@ -1164,7 +1240,17 @@ def main() -> None:
                         cad_line += f" iou={iou:.2f}"
                     if not ok:
                         cad_line += "  MISS"
-                elif cad_worker is not None and cad_worker.busy:
+                elif top_track is not None and top_track["fail_t"] is not None:
+                    # 맞춰 보았지만 안 맞음 (검은 브라켓 · 뎁스가 부족한 자리). 일정 시간마다 다시 해 본다.
+                    pose = top_track.get("pose") or {}
+                    xyz_line = "물체 x/y/z 축: CAD miss (이 브라켓은 뎁스로 맞추지 못함)"
+                    body_line = "물체 Rx/Ry/Rz: -"
+                    base_line = "베이스 기준 Rx/Ry/Rz: -"
+                    cad_line = (
+                        f"CAD miss on={pose.get('scene_frac', 0):.2f} vis={pose.get('vis_frac', 0):.2f}"
+                        f"  {_CAD_MISS_RETRY_S:.0f}초마다 다시 (c=바로)"
+                    )
+                elif (cad_worker is not None and cad_worker.busy) or (cad_tracks is not None and cad_tracks.busy):
                     xyz_line = "물체 x/y/z 축: 등록 중 ..."
                     body_line = "물체 Rx/Ry/Rz: ..."
                     base_line = "베이스 기준 Rx/Ry/Rz: ..."
@@ -1176,8 +1262,9 @@ def main() -> None:
                     cad_line = "CAD 대기"
                 if method == "cad" and others_poses:
                     cad_line += f"  외 {len(others_poses)}개"
-                if method == "cad" and kpt_worker is not None:
-                    cad_line = "[CAD 정합] " + cad_line + "  (k=키포인트)"
+                if method == "cad":
+                    # 지금 자세 방식을 늘 보이게. 키포인트 모델이 없으면 바꾸는 안내는 뺀다.
+                    cad_line = "[CAD 정합] " + cad_line + ("  (k=키포인트)" if kpt_worker is not None else "")
                 overlay_lines = [
                     (50, xyz_line, (0, 255, 255)),
                     (78, body_line, (0, 255, 255)),
@@ -1193,8 +1280,9 @@ def main() -> None:
                     thick = 2 if j == kpt_target else 1
                     for c in kp["outline"] or []:
                         cv2.polylines(bgr, [c.astype(np.int32)], True, (255, 200, 0), thick, cv2.LINE_AA)
-                if kpt_target is not None:
-                    T_draw = invert_T(T_bc) @ np.asarray(kpt_poses[kpt_target]["T"], dtype=np.float64)
+                # CAD 정합처럼 찾은 브라켓마다 3축을 그린다 (고른 것은 윤곽이 굵다)
+                for kp in kpt_poses:
+                    T_draw = invert_T(T_bc) @ canonical_pose(kp["T"])
                     _draw_cad_axes(bgr, T_draw, K)
                     _draw_cad_axes(depth_vis, T_draw, K)
             elif cad_pose is not None or others_poses:
@@ -1203,13 +1291,13 @@ def main() -> None:
                         cv2.polylines(bgr, [c.astype(np.int32)], True, (255, 200, 0), 1, cv2.LINE_AA)
                     T_o = np.asarray(op["T"], dtype=np.float64)
                     if T_bc is not None:
-                        T_o = invert_T(T_bc) @ T_o
+                        T_o = invert_T(T_bc) @ canonical_pose(T_o)
                     _draw_cad_axes(bgr, T_o, K)
                     _draw_cad_axes(depth_vis, T_o, K)
             if method == "cad" and cad_pose is not None:
                 T_draw = np.asarray(cad_pose["T"], dtype=np.float64)
                 if T_bc is not None:
-                    T_draw = invert_T(T_bc) @ T_draw
+                    T_draw = invert_T(T_bc) @ canonical_pose(T_draw)
                 _draw_cad_axes(bgr, T_draw, K)
                 _draw_cad_axes(depth_vis, T_draw, K)
             filters.sync()
@@ -1225,6 +1313,8 @@ def main() -> None:
                 refit_plane = not args.no_plane
                 kpt_poses, kpt_target = [], None
                 others_poses = []
+                if cad_tracks is not None:
+                    cad_tracks.clear()
                 print(f"장면 {replay.name}")
             if key == ord("k"):
                 if kpt_worker is None:
@@ -1325,11 +1415,7 @@ def main() -> None:
                     else:
                         print("이미 등록 중입니다.")
                 else:
-                    last_cad_t = time.monotonic()
-                    last_cad_anchor = None
-                    cad_full_done = True
-                    last_full_anchor = _median_xyz(last_xyz)
-                    last_full_class = cad_class_id
+                    cad_worker_anchor = _median_xyz(last_xyz)
                     if req_id is not None:
                         pending_req_id = req_id
                         pending_req_extra = req_extra
@@ -1355,27 +1441,32 @@ def main() -> None:
                 ROI_DIR.mkdir(parents=True, exist_ok=True)
                 preview = ROI_DIR / f".preview_{frame_name}.ply"
                 # 보이는 브라켓 전부. CAD 는 맨 위 (기본 빨강) + 나머지 (빨강의 진하고 연한 색)
-                v_others = others_poses if method == "cad" else []
+                if method == "kpt":
+                    # 키포인트 자세도 CAD 를 겹쳐 본다 (고른 것은 기본 빨강). 검은 브라켓처럼 뎁스가 틀려도 자세는 보인다.
+                    v_top = None if kpt_target is None else {"T": kpt_poses[kpt_target]["T"]}
+                    v_others = [{"T": kp["T"]} for j, kp in enumerate(kpt_poses) if j != kpt_target]
+                else:
+                    v_top, v_others = cad_pose, others_poses
                 cad_vis = None
-                if cad_pose is not None or v_others:
+                if v_top is not None or v_others:
                     from yolo.pose.register import load_cad_xyz
 
                     cad_vis = load_cad_xyz(voxel_mm=_OVERLAY_VOXEL_MM)
-                o_xyz, o_rgb = _preview_cloud(instances, cad_pose, v_others, cad_vis)
+                o_xyz, o_rgb = _preview_cloud(instances, v_top, v_others, cad_vis)
                 write_ply(preview, o_xyz, o_rgb)
                 if v_others:
-                    print(f"Open3D: 맨 위 CAD 1개 + 나머지 {len(v_others)}개 (빨강 진하기로 구분)")
+                    print(f"Open3D: {METHOD_KO[method]} 자세 CAD — 고른 것 1개 + 나머지 {len(v_others)}개 (빨강 진하기로 구분)")
                 view_cmd = [
                     sys.executable,
                     str(Path(__file__).resolve().parent / "view" / "view_cloud.py"),
                     str(preview),
                     "--no-obb",
                 ]
-                if cad_pose is not None:
+                if v_top is not None:
                     # T[0,0] 이 음수면 "--cad-T" 다음 토큰이 새 옵션으로 파싱된다.
                     view_cmd.append(
                         "--cad-T="
-                        + ",".join(f"{x:.9g}" for x in np.asarray(cad_pose["T"]).reshape(-1))
+                        + ",".join(f"{x:.9g}" for x in np.asarray(v_top["T"]).reshape(-1))
                     )
                 if plane is not None:
                     desk = (
@@ -1426,8 +1517,8 @@ def main() -> None:
         cam.close()
         if cad_worker is not None:
             cad_worker.close()
-        if cad_others is not None:
-            cad_others.close()
+        if cad_tracks is not None:
+            cad_tracks.close()
         if kpt_worker is not None:
             kpt_worker.close()
         cv2.destroyAllWindows()

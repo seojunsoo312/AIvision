@@ -293,6 +293,51 @@ def _desk_ray_point(uv: np.ndarray, cam: Camera, height_mm: float) -> np.ndarray
     return o + s * d
 
 
+def project_many(T_base_obj: np.ndarray, pts: np.ndarray, cam: Camera,
+                 T_cam_base: np.ndarray | None = None) -> np.ndarray:
+    """자세 여러 개 (B, 4, 4) → 화면 점 (B, N, 2). project_base 를 자세마다 부르는 것과 같은 계산.
+
+    cv2.projectPoints 를 자세마다 부르면 파이썬 왕복이 계산보다 훨씬 오래 걸린다 (책상 붙이기는 브라켓마다 수백 번).
+    OpenCV 왜곡 모델 (k1 k2 p1 p2 k3 [k4 k5 k6]) 을 numpy 로 한 번에 계산한다.
+    """
+    dist = np.zeros(8)
+    d = np.asarray(cam.dist, float).ravel()
+    if len(d) > 8 and np.any(d[8:] != 0.0):  # 얇은 프리즘 · 기울어진 센서 항은 numpy 로 안 함
+        return np.stack([project_base(T, pts, cam) for T in np.asarray(T_base_obj, float)])
+    dist[:min(8, len(d))] = d[:8]
+    k1, k2, p1, p2, k3, k4, k5, k6 = dist
+    if T_cam_base is None:
+        T_cam_base = np.linalg.inv(cam.T_base_cam)
+    T = T_cam_base @ np.asarray(T_base_obj, float)
+    P = np.asarray(pts, float) @ T[:, :3, :3].transpose(0, 2, 1) + T[:, None, :3, 3]
+    z = P[..., 2]
+    z = np.where(z != 0.0, z, 1.0)
+    x, y = P[..., 0] / z, P[..., 1] / z
+    r2 = x * x + y * y
+    r4 = r2 * r2
+    r6 = r4 * r2
+    radial = (1.0 + k1 * r2 + k2 * r4 + k3 * r6) / (1.0 + k4 * r2 + k5 * r4 + k6 * r6)
+    xd = x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+    yd = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y
+    K = cam.K
+    u = K[0, 0] * xd + K[0, 1] * yd + K[0, 2]
+    v = K[1, 1] * yd + K[1, 2]
+    return np.stack([u, v], axis=-1)
+
+
+def _desk_poses(A: np.ndarray, z: np.ndarray, x: np.ndarray, y: np.ndarray, yaw: np.ndarray) -> np.ndarray:
+    """desk_pose 를 여러 개 한 번에. A 는 (4, 4) 하나 또는 (B, 4, 4), 나머지는 (B,)."""
+    c, s = np.cos(yaw), np.sin(yaw)
+    Rz = np.zeros((len(yaw), 4, 4))
+    Rz[:, 0, 0], Rz[:, 0, 1], Rz[:, 1, 0], Rz[:, 1, 1] = c, -s, s, c
+    Rz[:, 2, 2] = Rz[:, 3, 3] = 1.0
+    T = Rz @ A
+    T[:, 0, 3] += x
+    T[:, 1, 3] += y
+    T[:, 2, 3] += z
+    return T
+
+
 def fit_desk(pts: np.ndarray, img: np.ndarray, cam: Camera, weights: np.ndarray | None = None,
              init_T_base: np.ndarray | None = None) -> tuple[np.ndarray, int, float] | None:
     """책상 위 자세로 맞추기. (T_base_obj, 자세 클래스, 재투영 오차 평균 px). 모르는 값은 x, y, 각도.
@@ -300,58 +345,85 @@ def fit_desk(pts: np.ndarray, img: np.ndarray, cam: Camera, weights: np.ndarray 
     모든 후보 방향 × 각도 10° 로 대충 놓아 본 뒤 좋은 것 몇 개를 가우스-뉴턴으로 다듬는다.
     weights 는 점마다 무게 (사람이 고친 점을 더 믿게). init_T_base (직전 자세) 를 주면 그 자리에서도 꼭 다듬어 본다.
     무게 준 오차로만 후보를 고르면 고친 점 하나만 맞는 엉뚱한 자세로 넘어갈 수 있어, 무게 없는 오차로도 후보를 고른다.
+    후보들과 다듬기는 자세 여러 개를 한 번에 계산한다 (project_many). 순서 · 수식은 하나씩 하던 때와 같다.
     """
     if len(pts) < DESK_MIN_PTS:
         return None
+    pts = np.asarray(pts, float)
+    img = np.asarray(img, float)
     wt = np.ones(len(pts)) if weights is None else np.asarray(weights, float)
     sw = np.repeat(np.sqrt(wt), 2)
     center_img = (img * wt[:, None]).sum(axis=0) / wt.sum()
+    T_cam_base = np.linalg.inv(cam.T_base_cam)
+    cands = desk_candidates()
+    yaws = np.deg2rad(np.arange(0.0, 360.0, 10.0))
     trials = []
-    for ci, (cid, A, z) in enumerate(desk_candidates()):
+    for ci, (cid, A, z) in enumerate(cands):
         q = pts @ A[:3, :3].T + A[:3, 3]
         p0 = _desk_ray_point(center_img, cam, z + float(q[:, 2].mean()))
-        for yaw in np.deg2rad(np.arange(0.0, 360.0, 10.0)):
-            qc = (_Rz(yaw)[:3, :3] @ q.mean(axis=0))
-            x, y = p0[0] - qc[0], p0[1] - qc[1]
-            d = np.linalg.norm(project_base(desk_pose(A, z, x, y, yaw), pts, cam) - img, axis=1)
-            trials.append(((d * wt).sum() / wt.sum(), d.mean(), ci, np.array([x, y, yaw])))
+        qm = q.mean(axis=0)
+        c, s = np.cos(yaws), np.sin(yaws)
+        x = p0[0] - (c * qm[0] - s * qm[1])
+        y = p0[1] - (s * qm[0] + c * qm[1])
+        d = np.linalg.norm(project_many(_desk_poses(A, np.full(len(yaws), z), x, y, yaws), pts, cam, T_cam_base)
+                           - img, axis=2)
+        e_w = (d * wt).sum(axis=1) / wt.sum()
+        e_m = d.mean(axis=1)
+        for k, yaw in enumerate(yaws):
+            trials.append((float(e_w[k]), float(e_m[k]), ci, np.array([x[k], y[k], yaw])))
     starts = sorted(trials, key=lambda t: t[0])[:6] + sorted(trials, key=lambda t: t[1])[:6]
     if init_T_base is not None:
         # 직전 자세와 같은 방향인 후보에서, 직전 위치 · 각도로 출발
-        for ci, (_cid, A, z) in enumerate(desk_candidates()):
+        for ci, (_cid, A, z) in enumerate(cands):
             M = init_T_base[:3, :3] @ A[:3, :3].T
             yaw = float(np.arctan2(M[1, 0], M[0, 0]))
             if _rot_deg(_Rz(yaw)[:3, :3], M) < 5.0:
                 t = init_T_base[:3, 3] - (_Rz(yaw) @ A)[:3, 3]
                 starts.append((0.0, 0.0, ci, np.array([t[0], t[1], yaw])))
+
+    # 출발점마다 따로 하던 감쇠 가우스-뉴턴 (최대 30 번) 을 한 번에: 출발점마다 lam · 끝남을 따로 둔다.
+    A_s = np.stack([cands[ci][1] for _e, _e2, ci, _p in starts])
+    z_s = np.array([cands[ci][2] for _e, _e2, ci, _p in starts])
+    P = np.stack([prm for _e, _e2, _ci, prm in starts]).astype(float)
+
+    def resid(Pk: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        T = _desk_poses(A_s[idx], z_s[idx], Pk[:, 0], Pk[:, 1], Pk[:, 2])
+        return (project_many(T, pts, cam, T_cam_base) - img).reshape(len(idx), -1) * sw
+
+    every = np.arange(len(starts))
+    lam = np.full(len(starts), 1e-3)
+    R = resid(P, every)
+    active = np.ones(len(starts), bool)
+    eye = np.eye(3)
+    for _ in range(30):
+        idx = np.flatnonzero(active)
+        if len(idx) == 0:
+            break
+        p, r = P[idx], R[idx]
+        # 수치 미분 세 방향을 한 번에 계산한다
+        eps = np.array([0.05, 0.05, 1e-3])
+        moved = (p[None, :, :] + np.diag(eps)[:, None, :]).reshape(-1, 3)
+        rd = resid(moved, np.tile(idx, 3)).reshape(3, len(idx), -1)
+        J = ((rd - r[None]) / eps[:, None, None]).transpose(1, 2, 0)
+        H = np.einsum("kmi,kmj->kij", J, J)
+        g = np.einsum("kmi,km->ki", J, r)
+        damp = (np.diagonal(H, axis1=1, axis2=2) + 1e-9)[:, :, None] * eye
+        step = -np.linalg.solve(H + lam[idx, None, None] * damp, g[:, :, None])[:, :, 0]
+        r_new = resid(p + step, idx)
+        better = (r_new * r_new).sum(axis=1) < (r * r).sum(axis=1)
+        ok_i, bad_i = idx[better], idx[~better]
+        P[ok_i] = p[better] + step[better]
+        R[ok_i] = r_new[better]
+        lam[ok_i] *= 0.3
+        lam[bad_i] *= 10.0
+        done = np.abs(step[better]).max(axis=1) < 1e-4
+        active[ok_i[done]] = False
     best = None
-    for _e, _e2, ci, prm in starts:
-        cid, A, z = desk_candidates()[ci]
-        prm = prm.copy()
-
-        def resid(p):
-            return (project_base(desk_pose(A, z, p[0], p[1], p[2]), pts, cam) - img).ravel() * sw
-
-        lam = 1e-3
-        r = resid(prm)
-        for _ in range(30):
-            J = np.empty((len(r), 3))
-            for j, eps in enumerate((0.05, 0.05, 1e-3)):
-                dp = np.zeros(3)
-                dp[j] = eps
-                J[:, j] = (resid(prm + dp) - r) / eps
-            H = J.T @ J
-            step = -np.linalg.solve(H + lam * np.diag(np.diag(H) + 1e-9), J.T @ r)
-            r_new = resid(prm + step)
-            if r_new @ r_new < r @ r:
-                prm, r, lam = prm + step, r_new, lam * 0.3
-                if np.abs(step).max() < 1e-4:
-                    break
-            else:
-                lam *= 10.0
-        e = float((np.linalg.norm((r / sw).reshape(-1, 2), axis=1) * wt).sum() / wt.sum())
+    for k, (_e, _e2, ci, _prm) in enumerate(starts):
+        cid, A, z = cands[ci]
+        e = float((np.linalg.norm((R[k] / sw).reshape(-1, 2), axis=1) * wt).sum() / wt.sum())
         if best is None or e < best[2]:
-            best = (desk_pose(A, z, *prm), cid, e)
+            best = (desk_pose(A, z, *P[k]), cid, e)
     return best
 
 
